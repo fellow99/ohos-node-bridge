@@ -72,12 +72,12 @@ RFC 2119 关键词：MUST / MUST NOT / SHOULD / MAY。状态列：`✅实测实�
 
 | # | 需求 | 状态与证据 |
 |---|---|---|
-| FR-001-004 | 状态 MUST 可查询，取值集合 MUST 恰为 `idle` / `starting` / `running` / `failed` 四者。 | ✅ `Types.ets:8-13` |
+| FR-001-004 | 状态 MUST 可查询，取值集合 MUST 恰为 `idle` / `starting` / `running` / `failed` / `stopping` / `stopped` 六者。 | ✅ 六态（`Types.ets:17-24`）；`getState()` 只读 |
 | FR-001-005 | 初始状态 MUST 为 `idle`。 | ✅ `NodeRuntime.ets:22` |
-| FR-001-006 | 合法迁移 MUST 仅为：`idle → starting`（投递）、`starting → running`（探活成功）、`starting → failed`（投递失败或探活失败）、`running → failed`（运行期失败）。 | ✅ `NodeRuntime.ets:78,84,104,111` |
-| FR-001-007 | 状态 MUST NOT 由外部直接赋值；变更 MUST 仅发生于投递入口与探活标记入口。 | ✅ 字段 `private`（`NodeRuntime.ets:22-24`）；变更点仅 4 处 |
+| FR-001-006 | 合法迁移 MUST 仅为：`idle → starting`（投递）、`starting → running`（探活成功）、`starting/running → failed`（失败）、`starting/running → stopping`（`shutdown()` 标记）；`failed`/`stopped` 为终态。 | ✅ `NodeRuntime.ets`（`setState` 私有入口 + `shutdown()`；`Types.ets:17-24` 六态枚举） |
+| FR-001-007 | 状态 MUST NOT 由外部直接赋值；变更 MUST 仅发生于投递/探活/失败/关停入口。 | ✅ 字段 `private`；唯一变更入口 `setState()`（`NodeRuntime.ets`），无公开赋值面 |
 | FR-001-008 | `failed` MUST 是终态：MUST NOT 存在 `failed → running/starting/idle` 的迁移路径。 | ✅ `markRunning` 仅 `starting → running`；`markFailed` 只进 `failed` |
-| FR-001-009 | 状态集合 MUST NOT 含 `stopping` / `stopped`（进程内 Node 无优雅停止接口，假态有害）。 | ⚠️ 规划 §5.2/§5.3 列出六态，代码为四态 ⇒ 以四态为准，理由见 plan §3.1 |
+| FR-001-009 | 状态集合 = `idle` / `starting` / `running` / `failed` / `stopping` / `stopped`；`stopping` 由 `shutdown()` 标记（**不假装能停**：进程内 Node 无优雅停止接口，见 §4.1 与 plan §3.1）。 | ✅ 已实现 6 态（`Types.ets:17-24`）；`shutdown()` 置 `stopping` 并记录 reason（`NodeRuntime.ets`） |
 | FR-001-010 | 每次状态变更 SHOULD 留下可读回的证据（hilog / 日志）。 | ✅ `NodeRuntime.ets:85,94,112`（Logger.error / info） |
 | FR-001-011 | `running` MUST NOT 由状态机自行推定：只有消费方显式标记才会进入 `running`。 | ✅ 无自动轮询（`NodeRuntime.ets:98-106` 注释明文） |
 
@@ -144,7 +144,7 @@ RFC 2119 关键词：MUST / MUST NOT / SHOULD / MAY。状态列：`✅实测实�
 |---|---|---|
 | FR-001-044 | 公共类型 MUST 只经唯一对外出口暴露（barrel）。 | ✅ `Index.ets:16-18`；S2 |
 | FR-001-045 | 公共类型的任何改动 MUST 视为**破坏性变更**（文件头必须写明，并同步提升语义化版本）。 | ✅ `Types.ets:1-5`；S3 · 规划 §7.5 |
-| FR-001-046 | 状态枚举取值 MUST 为稳定字符串标识，与状态机四态一一对应。 | ✅ `Types.ets:8-13` |
+| FR-001-046 | 状态枚举取值 MUST 为稳定字符串标识，与状态机**六态**一一对应。 | ✅ `Types.ets:17-24`（`idle`/`starting`/`running`/`failed`/`stopping`/`stopped`） |
 | FR-001-047 | 启动结果 MUST 含四字段：成功标志、返回码（0 = 已投递；其它 = 原生线程创建错误码）、状态、人读消息。 | ✅ `Types.ets:37-46` |
 | FR-001-048 | 启动参数的**新增**字段 MUST 保持可选，以保证向后兼容（不得把可选字段改为必填）。 | 🔶 沿用既有形态：`Types.ets:16-34` 仅 `scriptPath` 必填；C4 要求参数一次性 ⇒ 新增字段只增不改语义 |
 

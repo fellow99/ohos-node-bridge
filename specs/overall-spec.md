@@ -224,7 +224,7 @@
 | NFR-REL-001 | 接口面越小越稳：公共类型即对外契约，改动即破坏性变更，必须提版本 | 类型文件头声明契约属性；版本记录可查（S3） |
 | NFR-REL-002 | 对外只暴露一个出口；新增公共符号必须同时更新出口与类型契约 | 出口清单与类型契约一致（S2） |
 | NFR-REL-003 | 接口语言不得使用动态类型（不得出现任意类型/未知类型），原生模块只经类型声明接入 | 编译期严格模式通过（S1） |
-| NFR-REL-004 | 信号上下文内禁止使用标准 IO 输出到标准流；只允许裸文件系统调用 | 崩溃路径只写文件（`open`/`write`/`close`）；格式化仅允许**栈上、无锁、无分配**（`snprintf` 口径待确认）（S5）⚠️ 见 §7 |
+| NFR-REL-004 | 信号上下文内禁止使用标准 IO 输出到标准流；只允许裸文件系统调用 | ✅ 已满足（2026-10-17）：崩溃路径只写文件（`open`/`write`/`close`）；格式化 = 手写 `u64_to_dec`/`u64_to_hex` + `lb_append*`（栈上、无锁、无分配、单次 `write()`）；handler 区间 0 命中 stdio/malloc/getenv（S5） |
 | NFR-REL-005 | 提交物中不得出现任何密钥/证书材料 | 仓库内无签名材料（⚠️ 当前工作区有一处未提交的越界，见 §7） |
 
 ---
@@ -254,15 +254,15 @@
 
 | 需求 | 现状 |
 |---|---|
-| FR-OVR-007 / 035 / 036 / 038 / 050 / 051 | ⬜ 规划未实现（Phase 1–2）：就绪等待、日志环、状态回调、调试开关门禁、关停接口、失败态阶段信息 |
-| FR-OVR-033 | ⚠️ **一半**：崩溃记录**已被原生层持久化**（`<HOME>/node-bridge/last-crash.json`）✅；**读回接口 ⬜ 未实现** |
-| FR-OVR-010–014（载荷自解包与入口解析） | ⬜ 规划未实现（Phase 1） |
+| FR-OVR-007 / 035 / 036 / 038 / 050 / 051 | ⚠️ 大部分已落地（2026-10-17）：`waitUntilRunning()`（就绪等待超时）✅、`logs()`（文件读尾 + `logRingSize`，内存环未做）⚠️、`onStateChange`（同步回调）✅、`shutdown()`（只标记 `stopping`，不假装能停）✅、`getStage()`/`getLastError()`（失败态阶段信息）✅；**调试开关门禁（release 无 `--inspect`）仍 ⬜** |
+| FR-OVR-033 | ✅ **两侧齐备**：崩溃记录被原生层持久化（`<HOME>/node-bridge/last-crash.json`）✅；ArkTS 侧 `lastCrash()` 读取接口已实现（含 JSON 损坏时日志尾降级重建）✅ |
+| FR-OVR-010–014（载荷自解包与入口解析） | ✅ 已实现（2026-10-17）：`payload/bootstrap.js` 的 tar.gz 自解包（`skipped` 计数）+ `.ready-<sha256 前 12 位>` 幂等 + CJS/ESM 入口解析 + 异步异常兜底；host 单测（`tests/payload/*.mjs`）与 `smoke-host` 全过 |
 | FR-OVR-042 / 043（桥的超时与上限、线程安全队列） | ⬜ 规划未实现（Phase 2） |
-| FR-OVR-023 | ⚠️ 内置参考脚本内出现了**应用特有变量名**，与 C1 冲突（应改为通用变量名）；原生层已提供通用 `envPairs` 注入（C 侧 ✅，ArkTS 侧尚未接线） |
-| FR-OVR-052 | ⚠️ 内置参考脚本只有顶层 `try/catch`，**捕获不到异步异常**，不满足硬约束 ⑱ |
+| FR-OVR-023 | ✅ 已修（2026-10-17）：内置参考脚本的 `PI_WEB_ENTRY` 兼容别名已删除（入口只认 `NODE_BRIDGE_ENTRY`，C1）；原生 `envPairs` 与 ArkTS 侧装配**均已接线**（`NodeRuntime.buildEnvPairs` → `start` 第 6 参） |
+| FR-OVR-052 | ✅ 已修（2026-10-17）：`payload/bootstrap.js` 已注册 `process.on('uncaughtException')` / `('unhandledRejection')` 兜底写独立通道 `app.log`（满足硬约束 ⑱） |
 | FR-OVR-053 | ⚠️ 自检脚本使用固定端口（探针用途可接受，但必须与产品路径区分） |
-| NFR-REL-004 | ⚠️ 崩溃处理器内使用**栈上 `snprintf`** + 自实现 `u64_to_dec()`（无锁、无分配、无 `OH_LOG_Print`）；S5 字面为「只允许裸 `open`/`write`/`close`」⇒ **口径待确认** |
+| NFR-REL-004 | ✅ 已满足（2026-10-17）：崩溃 handler 已改手写 `u64_to_dec`/`u64_to_hex` + `lb_append*` + 单次 `write()`；0 命中 `printf`/`snprintf`/`vsnprintf`/`OH_LOG_Print`/`malloc`/`getenv`（S5 关闭） |
 | NFR-REL-005 | ⚠️ 工作区内的工程构建配置被本地工具写入了**真实签名材料与口令密文**（尚未提交，但受版本控制跟踪的文件一旦提交即入库） |
 | FR-OVR-062 的「版本下限可见告警」 | ⬜ 规划未实现（Phase 1） |
-| NFR-SIZE-001/003 | ⚠️ 压缩开关未落在正确层级 ⇒ 体积预算与压缩判据目前**不成立** |
+| NFR-SIZE-001/003 | ✅ 已修（2026-10-17，B4/R2）：消费方 `pi-desktop-ark/entry/src/main/module.json5` 已声明 module 级 `compressNativeLibs: true` + `extractNativeLibs: true`；实测签名 HAP **46,031,244 B**、三个 `.so` 全部 `compress_type=8`（DEFLATE；此前 129,535,202 B / 全 0） |
 | FR-OVR-068 / NFR-CMP-002 | ⚠️ 第三方许可清单尚未随包（Phase 2/3 交付物） |

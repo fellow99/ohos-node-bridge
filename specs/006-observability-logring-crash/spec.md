@@ -78,12 +78,12 @@
 |---|---|---|---|
 | **FR-006-001** | **双通道输出**：库的关键事件必须**同时**进 hilog 与日志文件；任何单通道实现都视为未完成 | 🔶 ArkTS 侧 `info/warn/error` **只有 hilog**（`Logger.ets:14-24`）；C 侧 `log_line` 双通道 ✅（`node_bridge.c:69-71`）；Node 侧 stdout/stderr 只落文件 ⚠️（`node_bridge.c:185-192`） | 宪法 S9 ✅ · 规划 §5.7 ✅ |
 | **FR-006-002** | **写读配对**：每条写入通道必须声明它的**读回通道**与**读回者**；不允许只有「写成功」的断言 | ✅ 通路齐备：hilog→hilog、文件→`Logger.tail`/`/log`、**崩溃记录 → `lastCrash()`（`NodeRuntime.ets`）**、**进程 stdout/stderr → `logs()`（按行解析 §1.3 前缀）** | 宪法 C3 ✅ · 规划 §5.7 ✅ |
-| **FR-006-003** | **有界日志环**：`logs(): NodeLogEntry[]` 返回最近 N 行（N 由 `logRingSize` 决定，**默认 500**）；内存占用有硬上界；溢出策略为「丢最旧 + 可观测丢弃计数」，**不得**静默丢弃 | ⬜ 不存在；`logRingSize` 选项也不存在（`Types.ets:16-34` 无该字段） | 规划 §5.7 / §5.3 ✅ |
+| **FR-006-003** | **有界日志环**：`logs(): NodeLogEntry[]` 返回最近 N 行（N 由 `logRingSize` 决定，**默认 500**）；内存占用有硬上界；溢出策略为「丢最旧 + 可观测丢弃计数」，**不得**静默丢弃 | ⚠️ 接口已实现为**文件读尾 + 行数上限**：`logs(count?)` / `logRingSize`（默认 500）/ `NodeLogEntry`（`Types.ets`、`NodeRuntime.ets`）✅；读尾本身有 `MAX_TAIL_BYTES` 硬上界 ✅；**内存环与丢弃计数未做**（读文件而非驻留内存） | 规划 §5.7 / §5.3 ✅ |
 | **FR-006-004** | **按需读尾**：`Logger.tail(path, maxBytes)` 只读文件尾 `maxBytes` 字节；**空文件**返回固定占位串；**文件不存在 / 不可读 / 跑在信号错误路径上**一律返回占位串，**绝不抛异常** | ✅ `Logger.ets:27-52`（空文件 `'(log empty)'`:31-32；异常 `'(read log failed: …)'`:49-51；`finally` 关 fd:40-42） | 宪法 S9 ✅ · C3 ✅ |
-| **FR-006-005** | **读尾的多字节正确性**：读尾结果必须是**合法 UTF-8 文本**；截断点落在多字节字符或行中间时，必须丢掉被截断的首行/首字符而不是输出乱码 | ⚠️ 现状逐字节 `String.fromCharCode` 拼串（`Logger.ets:45-47`）⇒ 任何非 ASCII 字节（中文日志、`%{public}` 的路径、载荷输出）**必乱码** | 本模块缺陷（见 `plan.md` §6.2） |
-| **FR-006-006** | **读尾的入参边界**：`maxBytes` 必须有默认值与上界（防「一次读 1 GB 把宿主 OOM」）；`maxBytes ≤ 0` 时的行为必须**确定**且与「空文件」可区分 | ⚠️ 现状无默认值、无上界；`maxBytes ≤ 0` 会返回空串 `''`，与「读成功但没内容」不可区分（`Logger.ets:34-48`） | 本模块缺陷 |
-| **FR-006-007** | **原生单行日志**：`log_line(fmt, …)` 生成一条完整行（含换行），同时进 hilog 与文件；**一条日志只允许一次文件写**（不得把 `"\n"` 拆成第二次 `open/write/close`） | 🔶 `log_line` 存在（`node_bridge.c:62-73`），但换行是**第二次** `raw_write`（:70-71）⇒ 两个 fd 各自 append，跨线程时可交错出半行；级别固定 `LOG_INFO`（:69） | 规划 §5.7 ✅（级别选择） |
-| **FR-006-008** | **信号上下文安全**（硬要求）：崩溃/信号 handler 内**只允许**裸 `open`/`write`/`close`(+ `clock_gettime`/`sigaction`/`signal`/`raise`/静态表访问)；**禁止**任何 stdio 与格式化函数（`printf`/`snprintf`/`vsnprintf`/`OH_LOG_Print`/`malloc`/`getenv`） | ⚠️ `crash_handler` 用 `snprintf` + `strlen`（`node_bridge.c:103-107,109`）⇒ **违反 S5**（`snprintf` 不在 POSIX async-signal-safe 列表内，可能自死锁或在 handler 里二次崩溃） | 宪法 S5 ✅ · 规划 §5.10 ② ✅ |
+| **FR-006-005** | **读尾的多字节正确性**：读尾结果必须是**合法 UTF-8 文本**；截断点落在多字节字符或行中间时，必须丢掉被截断的首行/首字符而不是输出乱码 | ✅ 已修：`Logger.tail()` 用 `buffer.from(ab, 0, read).toString('utf-8')` 按 UTF-8 解码，`dropTruncatedHead()` 丢掉被截断首行/替换符（`Logger.ets`；R2 复核） | 宪法 C3 ✅ |
+| **FR-006-006** | **读尾的入参边界**：`maxBytes` 必须有默认值与上界（防「一次读 1 GB 把宿主 OOM」）；`maxBytes ≤ 0` 时的行为必须**确定**且与「空文件」可区分 | ✅ 已修：默认 `8192`、硬上界 `4 MiB`；`maxBytes ≤ 0` 返回 `'(maxBytes <= 0)'`，与 `'(log empty)'`/`'(log missing)'` 可区分（`Logger.ets`） | 本模块已关闭 |
+| **FR-006-007** | **原生单行日志**：`log_line(fmt, …)` 生成一条完整行（含换行），同时进 hilog 与文件；**一条日志只允许一次文件写**（不得把 `"\n"` 拆成第二次 `open/write/close`） | ✅ 已修：`write_line()` 一次 `snprintf` 拼出 `<stream> <epochMs> <text>\n`（契约 §1.3），随后**单次** `raw_write_fd`；`log_line` 双通道（hilog + 文件） | 规划 §5.7 ✅ |
+| **FR-006-008** | **信号上下文安全**（硬要求）：崩溃/信号 handler 内**只允许**裸 `open`/`write`/`close`(+ `clock_gettime`/`sigaction`/`signal`/`raise`/静态表访问)；**禁止**任何 stdio 与格式化函数（`printf`/`snprintf`/`vsnprintf`/`OH_LOG_Print`/`malloc`/`getenv`） | ✅ 已满足（2026-10-17）：`crash_handler` 零 `snprintf`——手写 `u64_to_dec`/`u64_to_hex` + `lb_append*` 逐字节拼栈缓冲 + **单次 `write()`**；handler 区间 0 命中 stdio/malloc/getenv（`sig_name`/`stage_hint` 只剩纯比较） | 宪法 S5 ✅ · 规划 §5.10 ② ✅ |
 | **FR-006-009** | **崩溃结构化取证**：崩溃行必须包含**信号号 + 地址 + 程序计数 + 返回地址 + 栈指针 + 首参寄存器**，格式固定为 `CRASH sig=%d si_addr=%p pc=%p lr=%p sp=%p r0=%p`（ARM64: `lr = regs[30]`、`sp = uc_mcontext.sp`、`r0 = regs[0]`） | ✅ `node_bridge.c:100-112`（字段与映射齐备；`buf[512]` 栈缓冲足够） | 宪法 C6 ✅ · 规划 §5.7 / §5.10 ⑬ ✅ |
 | **FR-006-010** | **信号集**：至少覆盖 `SIGSEGV(11)`/`SIGILL(4)`/`SIGBUS(7)`/`SIGABRT(6)`/`SIGFPE(8)`/`SIGTRAP(5)`；`SIGTRAP` 必须在列（无 ACL 时 V8 的 JIT 失败就是 `sig=5`，是本形态最常见崩溃） | ✅ `node_bridge.c:115` | 规划 §D.8 ①（`CRASH sig=5`）✅ |
 | **FR-006-011** | **不吞崩溃**：证据写完后必须恢复默认处置并重新抛出信号（`SIG_DFL` + `raise`），**禁止**在 handler 里「记录后继续跑」 | ✅ `node_bridge.c:110-111` | 宪法 C2 ✅ · 规划 §5.7 ✅ |
@@ -91,13 +91,13 @@
 | **FR-006-013** | **崩溃记录文件**：崩溃时写 `<home>/node-bridge/last-crash.json`（每次崩溃覆盖），字段至少 `at`/`stage`/`signal`/`hint`（+ `logTail` 由 ArkTS 侧补）；写入必须是**单次 `write`**（不依赖堆、不做 JSON 库），且失败不得影响 `CRASH` 行落盘 | ✅ C 侧 `crash_handler` 覆盖写（`at`/`stage`/`signal`/`hint`，整块单次 `write`）；`logTail` 由 `NodeRuntime.lastCrash()` 补 20 行 | 规划 §5.7 ✅ |
 | **FR-006-014** | **跨启动可读**：`lastCrash(): CrashRecord \| null` 在**下次启动**可读到上次记录；进程内不可重启（C5）⇒ 这是失败态 UX 契约的输入之一 | ✅ 已实现：`NodeRuntime.lastCrash()`（`NodeRuntime.ets`，全文 **798 行**，含 `logs`/`lastCrash`/`shutdown`/`waitUntilRunning`）；读的是投递时**实际生效**的 `home`（`options.homeDir` 或 `filesDir`），与原生 handler 同源；`logTail` 由 ArkTS 补 20 行 | 宪法 C5 ✅ · 规划 §5.2/§5.3 ✅ |
 | **FR-006-015** | **崩溃记录的降级路径**：JSON 缺失/损坏/半写时，`lastCrash()` 必须能从日志尾里的 `CRASH` 行解析出**降级记录**（至少 `signal` 与原始行），而不是返回「无崩溃」 | ✅ 已实现：缺文件 ⇒ `null`（契约明文）；文件存在但 JSON 不可解析/零字节 ⇒ 从日志尾 `sys … CRASH ` 行重建 `at`/`signal` 的降级记录（`stage:''` + 常驻 `logTail`），并 `warn` 指名走了哪条路径（`NodeRuntime.degradedCrashFromLog`） | 宪法 C2 ✅ |
-| **FR-006-016** | **`hint` 的可操作性**：`hint` 必须把「症状 → 处置」写成人可读的一步（如 `sig=5` ⇒ 查 ACL/W^X；`SIGABRT` + 崩溃栈含 `libnode_bridge.so` ⇒ 查载荷未捕获异常，如端口 `EADDRINUSE`） | ⬜ 只有信号号，无提示（`node_bridge.c:104`） | 规划 附录 B 症状 19 ✅ |
+| **FR-006-016** | **`hint` 的可操作性**：`hint` 必须把「症状 → 处置」写成人可读的一步（如 `sig=5` ⇒ 查 ACL/W^X；`SIGABRT` + 崩溃栈含 `libnode_bridge.so` ⇒ 查载荷未捕获异常，如端口 `EADDRINUSE`） | ✅ 已实现：`stage_hint()` 按阶段给出一步处置文案（`dlopen`/`dlsym`/`stdio`/`start`/`running`），写进 `last-crash.json` 的 `hint` 字段（`node_bridge.c` `crash_handler`） | 规划 附录 B 症状 19 ✅ |
 | **FR-006-017** | **自检端点 `GET /facts`**：返回 `200` + `application/json`，结构为 `{ at, checks:{…} }`，`checks` **至少**含 **16 项**（`node`/`platform`/`arch`/`execArgv`/`versions`/`homedir`/`tmpdir`/`homedir_redirected`/`tmpdir_redirected`/`netifaces`/`cpus`/`spawn`/`wasm.validate`/`wasm.error`/`fs_write_readback`/`hotloop_ms_5rounds`）+ 响应级 `at`；任一项抛异常必须以 `\"ERR:…\"` 字符串留在 JSON 里，**不得**让端点整体 500 | ✅ `payload/selfcheck.js`（16 键冻结，`tools/smoke-host.mjs` 阶段④逐键对齐） | 规划 §5.7 ✅ · §D.9 ✅ |
 | **FR-006-017a** | **自检端点集合**：`/facts` `/log` `/rport`（POST）`/diag` 四条路径；其它路径一律 `404`；只绑 `127.0.0.1` | ✅ `payload/selfcheck.js`；`/diag` 返回 `{at, lastError, appLogTail, hostBridge}` | 规划 §5.7 ✅ |
 | **FR-006-018** | **`/facts` 即证书**：一次真机成功运行必须能仅凭该 JSON 判定「libnode 已加载、Node 起来了、事件循环在跑、HTTP 在听、fs 可用、loopback 可达」；不接受「截图看起来对」或「VmSize 很大」作为替代判据 | ✅ 字段齐备（`wasm.validate` + `fs_write_readback=OK` + `hotloop_ms_5rounds` + `homedir/tmpdir` 沙箱前缀） | 宪法 C6 ✅ · 规划 §5.7 ✅ · §D.9 ✅ |
 | **FR-006-019** | **`GET /log`**：返回 `200` + `text/plain`，正文为日志尾（默认 ≤ 8192 B）；**只读尾部**（不得把整个日志读进内存）；读失败时返回可读的失败文本而不是 500/空；其它路径一律 `404` | 🔶 存在（`selfcheck.js:66-79`），但用 `fs.readFileSync(whole)` 再 `slice(-8192)` ⇒ **超大日志会整份进内存**，且 `slice` 按 UTF-16 码元切分（不是字节） | 规划 §5.7 ✅ · §D.8 ✅ |
 | **FR-006-020** | **日志通道分离**：`node.log` 中**只允许**出现 Node/桥件/载荷自己的输出；宿主 Web 容器（ArkWeb/Chromium）的原生输出**不得**混入 | ✅ 已按 C1 落地：reader 线程**按行过滤**含 `arkweb/chromium_ext` / `chromium` 的组件输出（不写入文件），并在**首见**与**每个 reader 退出**时各写一条 `sys` 行报累计丢弃行数（不静默）；`out`/`err` 的口径已修订为「进程 stdout/stderr」（契约 §1.3） | 规划 §D.10 ⑱ ✅ · §5.10 ⑤ ✅ · §6.2 共享事实 2 ✅ |
-| **FR-006-021** | **stdout/stderr 必须被持续排空**：重定向形态必须保证「写入方永不被管道写满阻塞」（1 MB pipe + 独立 reader 线程），否则宿主 IO 线程被阻塞 ⇒ 白屏 | ⬜ 现在是直接写文件（无 reader）；`fd0` 也未接 `/dev/null` | 规划 §5.10 ⑤ ✅（R19）· §8 Phase 1 ⑥ ✅ |
+| **FR-006-021** | **stdout/stderr 必须被持续排空**：重定向形态必须保证「写入方永不被管道写满阻塞」（1 MB pipe + 独立 reader 线程），否则宿主 IO 线程被阻塞 ⇒ 白屏 | ✅ 已实现：`fd0 ← /dev/null`、`fd1/fd2 ← 各自 pipe`，独立 reader 线程持续排空并落盘；reader 退出时写 `sys` 行报累计丢弃/过滤行数（`node_bridge.c` `start_drain_threads`/reader） | 规划 §5.10 ⑤ ✅（R19）· §8 Phase 1 ⑥ ✅ |
 | **FR-006-022** | **日志文件有界**：必须有轮转/截断策略，避免长跑后日志无限增长（`/log` 与 `tail` 的可预测性依赖它）；轮转必须对「正在写」的进程安全（rename + 重开或 size cap） | ⬜ 无任何轮转；`O_APPEND` 无限增长（`node_bridge.c:55,185`） | 规划 §5.7（有界性）✅ |
 | **FR-006-023** | **级别与缓冲可见性**：日志级别必须可配；且**至少存在一条能进 hilog dump 缓冲的输出路径**（应用侧 `INFO` 常不进）；不能用「hilog 里没有那一行」反推「没执行」 | ⚠️ C 侧固定 `LOG_INFO`（`node_bridge.c:69`）；ArkTS 侧 `info/warn/error` 三档 ✅（`Logger.ets:14-24`）；无级别配置项 | 规划 §5.7 ✅ · 附录 B 症状 17 ✅ |
 | **FR-006-024** | **调试通道必须可关闭**：`--inspect` 只允许出现在 **debug** 构建；release 必须**没有**它；开关只允许有一个生效点（options → flags），不允许散落在载荷代码里 | ⬜ `flags` 是自由字符串（`Types.ets:25`、`NodeRuntime.ets:76`），无任何 debug/release 守卫；`BuildProfile.ets` 有 `DEBUG = true` 但无人使用 | 规划 §5.7「调试通道」✅ · §8 Phase 1 ⑤ ✅ |
@@ -129,7 +129,7 @@
 | 写入者 | 写到哪里 | 读回通道 | 读回者 | 现状 |
 |---|---|---|---|---|
 | ArkTS `Logger.info/warn/error` | hilog（domain `0xD0033`、tag `NODE_BRIDGE`、`%{public}s`） | `hdc shell hilog -x \| grep NODE_BRIDGE` | 值班排障者 | ✅ `Logger.ets:14-24`（⚠️ 未落盘 ⇒ 违反 S9 的「双通道」） |
-| C 桥件 `log_line` | hilog（domain `0xD003300`）+ `node.log` | 同上的 hilog；`Logger.tail`；`/log` | 排障者 / 诊断面板 | ✅ `node_bridge.c:62-73` |
+| C 桥件 `log_line` | hilog（domain `0xD0033`，与 ArkTS 侧相同，A1/R2）+ `node.log` | 同上的 hilog；`Logger.tail`；`/log` | 排障者 / 诊断面板 | ✅ `node_bridge.c` |
 | C 桥件 `crash_handler` | `node.log` 的 `CRASH` 行 + `last-crash.json` | `Logger.tail` 解析 / `lastCrash()` | 值班排障者 / 消费方失败态 UI | ✅ 行 + 记录文件都齐 |
 | Node 侧 stdout/stderr（载荷） | `node.log`（组件原生输出已过滤）；⬜ 日志环 + hilog | `Logger.tail` / `/log` / ✅ `logs()` | 诊断面板 / 回归基线 | ✅ 文件 + `logs()` 解析 |
 | 自检载荷 | HTTP 响应（内存内） | `hdc fport` + `curl /facts`、`curl /log` | 审计者 / CI 记录 | ✅ `selfcheck.js` |
@@ -166,8 +166,8 @@
 
 **AC-006-06 信号 handler 内不调 stdio**（宪法 S5 + §5.10 ②）
 - **When** 静态审查 + `grep -nE 'printf|snprintf|vsnprintf|OH_LOG_Print|malloc|getenv' library/src/main/cpp/node_bridge.c`
-- **Then** 命中只允许出现在 **非信号上下文**的函数里（如 `log_line`/`bootstrap`）；`crash_handler` 与 `raw_write` 内**零命中**；handler 只用 `open`/`write`/`close`/手写数字格式化/`signal`/`raise`
-- **现状**：⚠️ 不通过 —— `crash_handler` 含 `snprintf`（`node_bridge.c:103`）与 `strlen`（:109）
+- **Then** 命中只允许出现在 **非信号上下文**的函数里（如 `log_line`/`bootstrap`）；`crash_handler` 与 `raw_write_fd` 内**零命中**；handler 只用 `open`/`write`/`close`/手写数字格式化/`signal`/`raise`
+- **现状**：✅ 通过（2026-10-17）——`crash_handler` 已改手写 `u64_to_dec`/`u64_to_hex` + `lb_append*` + 单次 `write`；`grep -nE 'printf|snprintf|vsnprintf|OH_LOG_Print|malloc|getenv'` 的命中只在 `set_stage`/`log_line`/`write_line`/`js_start` 等**非信号路径**（R2 复核）
 
 **AC-006-07 `/facts` 一次成功运行即证书**（规划 §5.7 / §D.9）
 - **Given** 真机 + 已装 HAP（库侧不签名主体，装机走消费方或探针工程）
@@ -235,9 +235,9 @@
 | A8 | `dlopen` 只认**裸名** `libnode.so`；`io_uring_setup(425)` 本机返回 **8**（无 seccomp trap） | 规划 §D.8 ✅ · §D.9 ✅ | 日志里必须保留 `dlopen(...) -> OK/err` 行作为「哪条候选命中」的证据 |
 | A9 | 端口冲突会把**整个 App 进程** abort（载荷未捕获异常） | 规划 §D.10 ⑰ ✅ · 附录 B 19 ✅ | 崩溃记录必须能区分「载荷异常（SIGABRT + 栈含 `libnode_bridge.so`）」与「V8 W^X 拒绝（SIGTRAP）」 |
 | A10 | 库**不签名主体**，装机走消费方或探针工程 | 规划 附录 A ✅ | 本模块的真机验收必须在消费方应用或探针工程内执行，库侧只交付命令与判据 |
-| A11 | 库侧 **C 接口只有 3 个**（`start`/`isRunning`/`version`），扩展必须同步 `.d.ts` | 宪法 S8 ✅（`node_bridge.c:285-293`、`index.d.ts:8-15`） | `logs()`/崩溃记录若由原生实现，属 **002 的接口扩展**，需两个模块同时改 |
+| A11 | 库侧 **C 接口 5 个**（`start` 6 参 / `isRunning` / `version` / `lastError` / `stage`），扩展必须同步 `.d.ts` | 宪法 S8 ✅（`node_bridge.c` `Init()`、`index.d.ts`） | `logs()`/崩溃记录若由原生实现，属 **002 的接口扩展**，需两个模块同时改 |
 | A12 | 规划 §5.7 要求崩溃处理器「写 `last-crash.json` **+ hilog**」，但 §5.10 ② 与 S5 禁止在信号上下文调 `OH_LOG_Print` | ⚠️ 规划内部冲突 ✅ | 取 S5/§5.10 ②（更硬）：handler **只写文件**；hilog 由下次启动的 `lastCrash()`/ArkTS 侧补打 |
-| A13 | 规划 §5.7/§5.3 的路径是 `<filesDir>/node-bridge/…`，代码是 `<filesDir>/payload/…` | ⚠️ 代码与规划不一致 ✅（`Env.ets:15-27`） | Phase 1 必须**二选一并统一**（见 `plan.md` §9）；本规格以「统一后一致」为验收条件 |
+| A13 | 规划 §5.5/§5.7 **草案**的 `<filesDir>/node-bridge/payload` 与实现 `<filesDir>/payload` 不一致 | ✅ **已定案（B6/R2，2026-10-17）**：以实现值为准（payload 根 `<filesDir>/payload`、日志 `<filesDir>/payload/node.log`、崩溃记录 `<filesDir>/node-bridge/last-crash.json`）；规划草案措辞被取代（`docs/000-工程规划.md` 保留历史措辞） | 三处同源：`Env`/`Types`/`NodeRuntime` ✅ |
 
 ---
 

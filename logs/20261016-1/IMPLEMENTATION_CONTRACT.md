@@ -364,7 +364,7 @@ host.setTransport(fn);                                           // Phase 2 接�
 | 端点 | 响应 |
 |---|---|
 | `GET /facts` | `200 application/json`；`{at, checks:{…}}`；`checks` 键名冻结：`node` `platform` `arch` `execArgv` `versions` `homedir` `tmpdir` `homedir_redirected` `tmpdir_redirected` `netifaces` `cpus` `spawn` `wasm.validate` `wasm.error` `fs_write_readback` `hotloop_ms_5rounds` |
-| `GET /log` | `200 text/plain`；`<HOME>/payload/node.log` 尾 8192 字节（注意 §1.3 的组件输出过滤） |
+| `GET /log` | `200 text/plain`；`<HOME>/payload/node.log` **尾部**（注意 §1.3 的组件输出过滤）。当前实现按 **UTF-16 码元切 8192** —— 与本契约早期的「8192 字节」措辞不一致，已登记为 `specs/006-observability-logring-crash/plan.md` 缺陷 #11（目标：按 offset 有界读 + 按字节切并丢弃被截断的首字符）；`NodeRuntime.logs()` / `Logger.tail(path, maxBytes)` 走的是**字节精确**路径，两条读回路径切法不同是已知事实 |
 | `POST /rport` | `200 text/plain`；把请求体原文转发到 `127.0.0.1:${RPORT_PORT}`（缺省 19999），用于第三条取证通道 |
 | `GET /diag` | `200 application/json`；`{at, lastError, appLogTail, hostBridge:{transport, handles}}`（`appLogTail` 读 `<HOME>/payload/app.log` 末 4096 字节） |
 | 其它 | `404` |

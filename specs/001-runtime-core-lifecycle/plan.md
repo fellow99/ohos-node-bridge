@@ -42,13 +42,13 @@
 
 | 原则 | 判定 | 理由与证据 |
 |---|---|---|
-| **C1** 库/壳分离 | ✅ 符合 | `NodeRuntime.ets` / `Types.ets` 无窗口、ArkWeb、路由、鉴权、`pi`/`PI_*` 语义；失败态 UX 与 `onPrepareToTerminate` 明确留在消费方（spec §1.3、§8）。⚠️ 注意：`payload/bootstrap.js:43,49,52` 出现 `PI_WEB_ENTRY`，属 `004`/`payload` 面的既有偏差（`specs/STRUCTURE.md §8.1`），**不属本模块**，此处仅登记不处置 |
+| **C1** 库/壳分离 | ✅ 符合 | `NodeRuntime.ets` / `Types.ets` 无窗口、ArkWeb、路由、鉴权、`pi`/`PI_*` 语义；失败态 UX 与 `onPrepareToTerminate` 明确留在消费方（spec §1.3、§8）。✅ 2026-10-17：`payload/bootstrap.js` 的 `PI_WEB_ENTRY` 兼容别名已删除（入口只认 `NODE_BRIDGE_ENTRY`；C1 / FR-004-020） |
 | **C2** 不隐藏平台真相 | ⚠️ 部分 | 本模块全部失败路径返回结构化结果 + 日志（`NodeRuntime.ets:63-68,83-92`）；⚠️ 002 侧的 stdio/dlopen/dlsym 失败发生在**后台线程**，`js_start` 当时早已返回 0 ⇒ 本模块拿到 `ok=true`、状态停在 `starting`。原生侧**已**提供 `set_error`/`set_stage` 与 `js_last_error`/`js_stage` 上报，`.d.ts` 也已声明，但**本模块尚未接线** ⇒ 目前只能靠探针 0 + `node.log`（§9 第 6 条） |
 | **C3** 让最终使用者去读 | ✅ 符合 | 提供读回通道：`getLogPath()`（`NodeRuntime.ets:47-49`）+ `getOptions()`（`:51-53`）+ `Logger.tail()`（`Logger.ets:26-52`）；⬜ 日志环 `logs()` 未实现（属 006，规划 §5.7） |
 | **C4** 启动参数不可事后修改 | ✅ 符合 | `flags` 只在投递时读取一次（`NodeRuntime.ets:76,82`）；无任何 push/追加 API；`Types.ets:17-24` 显式写清「JIT 需要 ACL」「`--jitless` 会关掉 WebAssembly」的一次性语义 |
 | **C5** 单例与不可重启 | ✅ 符合 / ⚠️ 部分 | 幂等保护（`NodeRuntime.ets:62-69`）+ 无重启 API（spec FR-001-040/041）；⚠️ 规划 §5.2 要求「二次调用抛错并**保留首次失败原因**」——代码**不抛异常**（与 C5 的「返回失败」一致，优于抛错）但**未保留首次原因**（无 `lastError` 字段），仅回报当前状态（`NodeRuntime.ets:67`）⇒ Phase 1 补齐（§9 第 5 条） |
 | **C6** 诊断优先于修码 | ✅ 符合 / ⚠️ 部分 | 每处状态迁移都有 hilog 留痕（`NodeRuntime.ets:85,94,112`）+ 原生 `crash_handler` 写结构化崩溃行 `sys <ms> CRASH sig=… si_addr=… pc=… lr=…` 与覆盖写的 `<home>/node-bridge/last-crash.json`（`node_bridge.c` `crash_handler`）；⚠️ 真机端到端证书 `/facts` 目前**不含 `state`**（`payload/selfcheck.js:63` 只回 `{at, checks[]}`），规划 §5.7 要求的 `{…, state}` 未落地（属 006） |
-| **C7** 零上游补丁 / 二进制可替换 | ✅ 符合 | 本模块只依赖 002 暴露的 3 个符号，对 `libnode.so` 零假设、零补丁；运行时替换（`runtime.lock.json` 换一行）不影响本模块任何代码（规划 §5.8） |
+| **C7** 零上游补丁 / 二进制可替换 | ✅ 符合 | 本模块只依赖 002 暴露的 **5 个符号**（`start` 6 参 / `isRunning` / `version` / `lastError` / `stage`），对 `libnode.so` 零假设、零补丁；运行时替换（`runtime.lock.json` 换一行）不影响本模块任何代码（规划 §5.8） |
 
 ### 2.2 代码规约
 
@@ -58,10 +58,10 @@
 | **S2** barrel 唯一出口 | ✅ 符合 | `Index.ets:16-18` 导出 `NodeRuntime` / `NodeState` / `NodeRuntimeOptions` / `NodeStartResult`；新增公共 API 必须同步 `Types.ets` + `Index.ets` |
 | **S3** 类型改动即破坏性变更 | ✅ 符合 | `Types.ets:1-5` 文件头明文「消费方契约：改动即破坏性变更」，并回引规划 §7.5 |
 | **S4** 路径一律绝对 | ✅ 符合 | 默认值取自 `Context`（绝对路径）；本模块无 `process.cwd()` / `execPath` 依赖；`scriptPath` 契约要求绝对路径（`Types.ets:26-27`） |
-| **S5** 信号上下文禁用 stdio | ⚠️ 不适用（含 002 侧偏差） | 本模块无信号处理；002 的 `crash_handler` 仍调用 `snprintf`，与 S5 字面要求冲突 —— 属 002 面，本模块仅登记（`specs/STRUCTURE.md §4.1` 已记载） |
+| **S5** 信号上下文禁用 stdio | ✅ 合规 | 本模块无信号处理；002 的 `crash_handler` 已修（2026-10-17）：手写 `u64_to_dec`/`u64_to_hex` + `lb_append*` + **单次 `write()`**，handler 区间 0 命中 stdio/malloc/getenv（§3.1 之外的 002 面，本模块仅登记） |
 | **S6** native 产物落点固定 | ✅ 不适用 | 属 002（`CMakeLists.txt` 的 `CMAKE_LIBRARY_OUTPUT_DIRECTORY`） |
 | **S7** 引导件不链接 libnode | ✅ 不适用 | 属 002（`dlopen` 在运行期） |
-| **S8** C 侧接口只有 3 个 | ✅ 符合（002 侧已自洽） | C 侧现导出 5 个符号（`start` 6 参 / `isRunning` / `version` / `lastError` / `stage`），`index.d.ts:20-43` **已同步** ⇒ S8 成立；本模块仍只调用 `start`/`isRunning`/`version`（`NodeRuntime.ets:39,44,82`），阶段/错误读回属**未接线**项（§9 第 6 条） |
+| **S8** C 侧接口 5 个（`start` 6 参） | ✅ 符合（002 侧已自洽） | C 侧现导出 5 个符号（`start` 6 参 / `isRunning` / `version` / `lastError` / `stage`），`index.d.ts` **已同步** ⇒ S8 成立；本模块已接线 `start`/`isRunning`/`version` + `getStage()`/`getLastError()`（读 `stage`/`lastError`） |
 | **S9** 日志双通道 | ✅ 符合（本模块侧） | 本模块经 `Logger` 走 hilog；文件通道由 002 的 pipe + 独立 reader 线程逐行落盘（`node_bridge.c` `start_drain_threads`/`stdio_reader`/`write_line`，行格式 `<stream> <epochMs> <text>`）⇒ §5.10 ⑤ 已落实；⬜ 日志环 `logs()` 与 `/facts.state` 仍属 006 未完成项；`Logger.tail` 失败返回占位串不抛异常 ✅（`Logger.ets:49-51`） |
 | **S10** 二进制不入库 | ✅ 符合 | 本模块无二进制；`libnode.so` 投放属 005/消费方（规划 §7.5、附录 G） |
 
@@ -82,7 +82,7 @@
 
 - 探活策略（端口 / 退避 / 超时 / 失败即刻回退）是**消费方契约**：规划 §6.1 把「生命周期」的责任切开——库提供 `start()`，消费方负责 `onPrepareToTerminate` 接线与失败态 UX；§5.10 ⑭ 🔶 更是要求「失败立刻回退而不是等满超时」。
 - 库内轮询会引入三个坏后果：① 占用一条 ArkTS 定时器/线程；② 把「就绪判据」（HTTP 探活是否属库）硬编码进库，违反 C1；③ 与 §5.2「ArkTS 只做投递 + 查状态 + 读日志，绝不 join」相矛盾。
-- 因此 `start()` 的返回是 `NodeStartResult`（`ok`/`code`/`state`/`message`），且 `ok=true` 的唯一含义是「已投递到后台线程」（`NodeRuntime.ets:55-60,95`）。⬜ 规划 §5.3 的 `waitUntilRunning(timeoutMs)` 属 Phase 1 候选，但**它的判据必须由消费方定义**（见 §9 第 3 条）。
+- 因此 `start()` 的返回是 `NodeStartResult`（`ok`/`code`/`state`/`message`），且 `ok=true` 的唯一含义是「已投递到后台线程」（`NodeRuntime.ets`）。✅ `waitUntilRunning(timeoutMs)` 已实现（轮询 `getState()`/`getStage()`，超时进 `failed` 并留证据）；**就绪判据本身仍由消费方探针定义**（库不解释应用语义，C1；见 §9 第 3 条）。
 
 ### 3.3 为什么 `isRunning()` 走原生 `g_node_running` 而不是进程探测
 
@@ -99,9 +99,9 @@
 
 ### 3.5 为什么默认 `flags` 是 `--no-verify-heap`（而非含 `--expose-internals`）
 
-- 代码默认值：`--no-verify-heap`（`NodeRuntime.ets:76`；原生二次兜底在 `node_bridge.c` `js_start`）✅；规划 §5.3 草案默认 `execArgv = ['--expose-internals','--no-verify-heap']` ⇒ ⚠️ **不一致**。
-- 硬约束 ⑤（规划 §2.3）明确要求 `--expose-internals` 出现在**启动参数**里，否则 `internal/modules/*` 全 `MODULE_NOT_FOUND`；§D.8 ③ ✅ 实测该路线在真机成立。
-- 结论：这是**已知悬空项**（不是本模块可以自行决定的取舍）——需要 Phase 1 决策「库默认带上」还是「消费方必须显式带」；在此之前消费方必须自查 `flags`（§9 第 8 条）。本模块不做静默追加（那会违反 C4 的「参数显式化」精神）。
+- 代码默认值：`--no-verify-heap`（`NodeRuntime.ets`；原生二次兜底在 `node_bridge.c` `js_start`）✅ —— 这是**真机验证过的值**且属最小可用集。规划 §5.3 **草案**默认 `execArgv = ['--expose-internals','--no-verify-heap']`：本工程把它记为**已知、有理由的实现偏差**（不再是「未解不一致」）。 |
+- 硬约束 ⑤（规划 §2.3）要求载荷走 **internal-module stub 路线** 时 `--expose-internals` 必须出现在**启动参数**里（否则 `require('internal/modules/…')` 全 `MODULE_NOT_FOUND`）；§D.8 ③ ✅ 实测该路线在真机成立。**仅该路线需要它**，与默认值偏差互不冲突。 |
+- **定案**：库默认只给 `--no-verify-heap`；`--expose-internals` 由消费方经 `flags`/`execArgv` 显式传入（库**不**静默追加，C4「参数显式化」）。`overall-test-cases.md` 的 TC-001-010 按此口径评判（§9 第 8 条已消解）。 |
 
 ---
 
@@ -110,7 +110,7 @@
 ### 4.1 `NodeState` 与迁移表
 
 ```ts
-export enum NodeState { IDLE = 'idle', STARTING = 'starting', RUNNING = 'running', FAILED = 'failed' }  // Types.ets:8-13
+export enum NodeState { IDLE = 'idle', STARTING = 'starting', RUNNING = 'running', FAILED = 'failed', STOPPING = 'stopping', STOPPED = 'stopped' }  // Types.ets:17-24（六态，2026-10-17）
 ```
 
 | 当前状态 | 事件 | 下一状态 | 合法? | 实现位置 |
@@ -130,7 +130,7 @@ export enum NodeState { IDLE = 'idle', STARTING = 'starting', RUNNING = 'running
 | `failed` | `markFailed(reason)` | `failed`（+ error 日志） | ✅ 允许重复取证 | `NodeRuntime.ets:110-112` |
 | 任意 | 崩溃（探针归 0） | **状态不变**（需消费方 `markFailed`）；原生 `crash_handler` 同时写 `CRASH` 日志行与 `last-crash.json` | ⚠️ 见 §9 第 7 条 | `node_bridge.c` `crash_handler` / `bootstrap` |
 
-**不存在的状态**：`stopping` / `stopped`（§3.1）——任何 UI 文案 MUST NOT 出现「正在停止」。
+**已实现的状态**：`stopping` / `stopped` 已随六态枚举落地（`Types.ets:17-24`）。`stopping` 只由 `shutdown()` 标记（**不假装能停**：进程内 `node::Start` 不返回，`shutdown()` 只记录 reason 并 warn）；`stopped` 为终态枚举值。任何 UI 文案 MUST NOT 把它宣传成「优雅停止」。
 
 ### 4.2 `NodeRuntimeOptions` 字段表
 
@@ -142,14 +142,14 @@ export enum NodeState { IDLE = 'idle', STARTING = 'starting', RUNNING = 'running
 | `homeDir` | `string?` | — | `context.filesDir` | ✅已实现（`Types.ets:31`；规划 §5.6） |
 | `logPath` | `string?` | — | `<homeDir>/payload/node.log` | ✅已实现（`Types.ets:33`；`Env.ets:25-27`） |
 | `entry` | `string` | ✅ | — | ⬜ 规划未实现（Phase 1）：规划 §5.3 用 `entry`（相对 `payloadRoot` 或绝对）；当前代码用 `scriptPath` ⇒ **重命名/兼容层需显式决策**（属破坏性变更，S3） |
-| `payloadRoot` | `string?` | — | `<filesDir>/node-bridge/payload`（规划 §5.5） | ⬜ 规划未实现（Phase 1/2）；代码实际沙箱布局是 `<filesDir>/payload`（`Env.ets:16`），而崩溃记录已落 `<filesDir>/node-bridge/last-crash.json`（`node_bridge.c` `js_start` 的 `g_crash_path`）⇒ 三处口径未对齐 ⚠️ 见 §9 第 2 条 |
+| `payloadRoot` | `string?` | — | `<filesDir>/payload`（**实现值**） | ✅ 已实现（`Types.ets` `payloadRoot?`、`Env.ets` `payloadDir`）；日志 = `<filesDir>/payload/node.log`，崩溃记录 = `<filesDir>/node-bridge/last-crash.json`。规划 §5.5/§5.7 **草案**的 `<filesDir>/node-bridge/payload` 已被本决策取代（B6/R2；`docs/000-工程规划.md` 保留历史措辞） |
 | `archive` / `archiveSha256` | `string?` | — | — | ⬜ 规划未实现（Phase 1，规划 §5.5 路线 ②；首选路线已改为零解压） |
 | `argv` | `string[]?` | — | `['node', <entry abs>]` | ⬜ 规划未实现（Phase 2；规划 §5.3） |
-| `execArgv` | `string[]?` | — | `['--expose-internals','--no-verify-heap']`（规划 §5.3） | ⬜ 规划未实现（Phase 1）；当前用空格分隔的 `flags` 字符串（`node_bridge.c` `bootstrap` 切分，上限 `MAX_ARGS=12`，超限显式 WARN） |
-| `env` | `Record<string,string>?` | — | — | ⚠️ **部分实现（仅原生侧）**：`start` 第 6 参 `envPairs` 已支持（`node_bridge.c` `js_start` + `apply_env_pairs`，`index.d.ts:26` 已声明），但 ArkTS 侧 `start()` 只传 5 参（`NodeRuntime.ets:82`）⇒ **实际不可用**；接线属 Phase 1/2（§9 第 6 条） |
+| `execArgv` | `string[]?` | — | **实现**：优先于 `flags`（给了就 `flags = execArgv.join(' ')`）；缺省不设，等价于 `flags='--no-verify-heap'` | ✅ 已实现（`Types.ets` `execArgv?`；契约 §2.3）。规划 §5.3 草案默认 `['--expose-internals','--no-verify-heap']` 属**文档化偏差**（§3.5） |
+| `env` | `Record<string,string>?` | — | — | ✅ 已实现：ArkTS 侧装配 `envPairs` 并作为 `start` 第 6 参传递（`NodeRuntime.ets` `buildEnvPairs` → `nodeBridge.start(...)`）；含换行/超长的键值有显式 `warn`（不静默） |
 | `cwd` | `string?` | — | `payloadRoot` | ⬜ 规划未实现（Phase 2；真机 `cwd='/'`，需显式 `chdir`，规划 §D.8） |
 | `capBytes` | `number?` | — | `8 MiB` | ⬜ 规划未实现（Phase 2，`003-host-bridge`；规划 §5.4） |
-| `logRingSize` | `number?` | — | `500` | ⬜ 规划未实现（Phase 1，`006`；规划 §5.7） |
+| `logRingSize` | `number?` | — | `500` | ✅ 已实现（`Types.ets` `logRingSize?`；`NodeRuntime.logs()` 用它，缺省 500）；⚠️ 2026-10-17：`NodeRuntime.ets` 提供 `logs()`/`lastCrash()`/`shutdown()`/`waitUntilRunning()`/`getPid()`/`get host`/`getStage()`/`getLastError()` ✅；
 | `jitless` | `boolean?` | — | `false` | ⬜ 规划未实现（Phase 1，规划 §5.3 / §4.7）：**诊断开关**，用了即关 WebAssembly |
 | `onLog` / `onStateChange` | 函数 | — | — | ⬜ 规划未实现（Phase 2，规划 §5.3）；当前状态变更只进日志，无回调 |
 
@@ -239,7 +239,7 @@ export enum NodeState { IDLE = 'idle', STARTING = 'starting', RUNNING = 'running
                                   设置 stdio（pipe+reader）/env → dlopen → dlsym → argv → node::Start（不返回）
 ```
 
-- **不使用** 事件总线 / Promise 链 / 中间层：状态机只有 4 态、变更点只有 4 处（`NodeRuntime.ets:78,84,104,111`），任何抽象都会增加审计成本。
+- **不使用** 事件总线 / Promise 链 / 中间层：状态机只有 **6 态**（`Types.ets:17-24`）、变更入口唯一（`setState()` 私有 + `shutdown()`），任何抽象都会增加审计成本。
 - 分层纪律：本模块**永不**读 Node 的 stdout、**永不** join 后台线程、**永不**自己做探活（规划 §5.2）。
 
 ### 6.2 `start()` 的 10 步流程
@@ -307,11 +307,11 @@ export enum NodeState { IDLE = 'idle', STARTING = 'starting', RUNNING = 'running
 | AC-001-10 UI 线程不阻塞 | TC-001-003（L4） | 该 TC 标注「库侧待复跑」⇒ 真机复跑后转 ✅ |
 | AC-001-11 参数快照 / 无修改入口 | TC-OVR-010（✅ 静态审导出面） | 运行期读回建议并入 TC-001-004 |
 | AC-001-12 `dlopen` 失败可见性 | **TC-002-008**（⚠️「当前静止在 `starting`」） | 本模块接线 `stage()` / `lastError()`（§9 第 6 条）后转 ✅ |
-| 失败原因结构化（本规格 §9 第 6 条） | TC-001-006（⬜） | 原生已写 `stage` + `last-crash.json`；缺 ArkTS 读回 |
-| 就绪等待接口（本规格 §9 第 3 条） | TC-001-007（⬜） | 判据须先由消费方签署 |
+| 失败原因结构化（本规格 §9 第 6 条） | TC-001-006（⬜） | ✅ 已接线：`getStage()` / `getLastError()` / `lastCrash()`（`NodeRuntime.ets`）可读回；原生已写 `stage` + `last-crash.json`（真机判据属 006 面复跑） |
+| 就绪等待接口（本规格 §9 第 3 条） | TC-001-007（⬜） | ✅ `waitUntilRunning(timeoutMs)` 已实现；就绪判据仍由消费方探针定义（库不解释应用语义） |
 | 版本下限可见告警 | TC-001-008（⬜，归属 001） | ⚠️ **本规格缺该 FR** ⇒ 见 §9 第 14 条 |
-| 关停态 `stopping` / `stopped` | TC-001-009（⬜，期待停止态） | ⚠️ **口径冲突**：本规格 §3.1 / FR-001-009 明确拒绝 ⇒ 见 §9 第 15 条 |
-| 默认 `flags` 载体 | TC-001-010（⚠️ 不含 `--expose-internals`） | 与硬约束 ⑤ 冲突，Phase 1 决策（§9 第 8 条） |
+| 关停态 `stopping` / `stopped` | TC-001-009 | ✅ 口径冲突**已消解**：六态为已实现形态（`Types.ets:17-24`），`shutdown()` 标记 `stopping`；TC-001-009 可按「`stopping` 出现、无假恢复」评判；脚本侧收尾钩子仍标 Phase 2（§9 第 15 条） |
+| 默认 `flags` 载体 | TC-001-010 | ✅ 默认 `flags='--no-verify-heap'` + `execArgv` 可覆盖；`--expose-internals` **仅在 stub 路线**由消费方显式传入（§3.5 文档化偏差；§9 第 8 条已消解） |
 
 ### 7.3 边界用例（必须覆盖）
 
@@ -333,7 +333,7 @@ export enum NodeState { IDLE = 'idle', STARTING = 'starting', RUNNING = 'running
 | `library/Index.ets` | barrel：`NodeRuntime` / `NodeState` / `NodeRuntimeOptions` / `NodeStartResult` 唯一出口 | 21 |
 | `library/src/main/ets/util/Env.ets` | 沙箱目录与日志路径（本模块的默认值来源 + 目录准备） | 65 |
 | `library/src/main/ets/log/Logger.ets` | hilog 入口 + `tail()` 读回（失败返回占位串） | 53 |
-| `library/src/main/cpp/node_bridge.c` | 002 引导件（工作区 Phase 1 过渡版；本模块只消费其中 3 个符号） | 640（HEAD 骨架版 295） |
+| `library/src/main/cpp/node_bridge.c` | 002 引导件（本模块消费其中 **5 个符号** + 原生错误/阶段读回） | 928 |
 | `library/src/main/cpp/types/libnode_bridge/index.d.ts` | 环境声明（S1/S8 的接入面）✅ 已同步 C 侧 5 符号 / 6 参 | 43 |
 | `library/src/main/module.json5` | HAR 模块声明（权限面；注意缺 `compressNativeLibs`，见 §9 第 10 条） | 24 |
 | `library/build-profile.json5` | stageMode + `abiFilters[arm64-v8a]` | 18 |
@@ -348,18 +348,18 @@ export enum NodeState { IDLE = 'idle', STARTING = 'starting', RUNNING = 'running
 
 | # | 未完成项 | 规划 § 依据 | 验收判据（可证伪） |
 |---|---|---|---|
-| 1 | **口径回写**：规划 §5.2/§5.3 的 6 态（含 `stopping`/`stopped`）与 4 态实现不一致 ⚠️ | §5.2 状态机行 · §5.3 `NodeRuntimeState` | 规划 §5.2/§5.3 改为 4 态（或明确标注 `stopping/stopped` 为 Phase 2 可选态），且 spec FR-001-009 与代码一致 |
-| 2 | **沙箱路径口径**：代码 `<filesDir>/payload`（`Env.ets:16`）vs 规划 §5.5/§5.7 的 `<filesDir>/node-bridge/payload`、§D.8 的 `<filesDir>/payload/` ⚠️ | §5.5 · §5.7 · §D.8 | 三处对齐为同一布局；`payloadRoot` 选项落地后 `Env` 与原生 `tmp` 派生一致 |
-| 3 | `waitUntilRunning(timeoutMs?)`：库侧形态已定（不阻塞 UI），**就绪判据未定** | §5.3 · §6.1 | 实现前必须有消费方签署的判据（端口 / HTTP / 日志标记 之一）；落地后 `overall-test-cases.md` 的 **TC-001-007** 由 ⬜ 转 ✅ |
-| 4 | `logs(): NodeLogEntry[]` 日志环 + `lastCrash(): CrashRecord`（006 面，本模块接口预留）；⚠️ 原生侧**已**写 `<home>/node-bridge/last-crash.json`（`node_bridge.c` `crash_handler`），缺的是 ArkTS 读回接口 | §5.3 · §5.7 | 崩溃后能在 ArkTS 侧读到结构化记录（阶段 / 信号 / 提示 / 日志尾）；使 `overall-test-cases.md` 的 **TC-001-006** / TC-002-006 的判据从「日志文本」升级为「结构化字段」 |
+| 1 | **口径回写**：规划 §5.2/§5.3 的 6 态（含 `stopping`/`stopped`）与实现不一致 ⚠️ | §5.2 状态机行 · §5.3 `NodeRuntimeState` | ✅ **已完成（2026-10-17）**：实现为**六态**（`Types.ets:17-24`），spec FR-001-004/006/009/046 与 plan §3.1/§4.1 已同步为六态口径 |
+| 2 | **沙箱路径口径**：代码 `<filesDir>/payload`（`Env.ets`）vs 规划 §5.5/§5.7 草案的 `<filesDir>/node-bridge/payload` | §5.5 · §5.7 · §D.8 | ✅ **已定案（2026-10-17，B6）**：以**实现值**为准 —— payload 根 `<filesDir>/payload`、日志 `<filesDir>/payload/node.log`、崩溃记录 `<filesDir>/node-bridge/last-crash.json`；规划草案措辞被取代（不改 `docs/000-工程规划.md`，历史措辞保留） |
+| 3 | `waitUntilRunning(timeoutMs?)`：库侧形态已定（不阻塞 UI），**就绪判据未定** | §5.3 · §6.1 | ✅ **已实现（2026-10-17）**：`NodeRuntime.waitUntilRunning(timeoutMs)`（轮询 `getState()`/`getStage()`；超时/`exited` 进 `failed` 并留证据）；判据仍由消费方探针定义 |
+| 4 | `logs(): NodeLogEntry[]` 日志环 + `lastCrash(): CrashRecord`（006 面，本模块接口预留） | §5.3 · §5.7 | ✅ **已实现（2026-10-17）**：`logs(count?)`（文件读尾 + `logRingSize`）与 `lastCrash()`（含 JSON 损坏时从 `CRASH` 行降级重建）均在 `NodeRuntime.ets`；原生 `<home>/node-bridge/last-crash.json` 同源 |
 | 5 | **保留首次失败原因**（C5 明文要求；当前只回当前状态）⚠️ | C5 · §5.2 单例行 | 二次 `start()` 的 `message`/新字段能回报**首次**失败原因与时间；`overall-test-cases.md` 的 TC-001-002 / TC-001-006 断言该字段非空 |
-| 6 | **异步失败与阶段读回接线**：原生已提供 `stage()` / `lastError()`（`.d.ts:35-43` 已声明），但本模块未提供读取入口 ⇒ 消费方只能看探针 + 日志 ⚠️ | §5.2 失败可见 · §5.7 · C2 | ① 本模块暴露阶段 / 最近错误读回（或让 `start()` 的异步结果可查）；② 使 `overall-test-cases.md` 的 **TC-002-008** 从「靠日志」升级为「看阶段/错误」 |
+| 6 | **异步失败与阶段读回接线**：原生已提供 `stage()` / `lastError()`（`.d.ts` 已声明） | §5.2 失败可见 · §5.7 · C2 | ✅ **已接线（2026-10-17）**：`getStage()` / `getLastError()`（`NodeRuntime.ets`）可直接读回，无需翻日志；`TC-002-008` 可按此复跑 |
 | 7 | **探针与状态的一致性**：崩溃后状态可能停留在 `running`（无自治线程） | §5.2 失败后的恢复 · §5.10 ⑭ | 二选一：① 提供显式 `refresh()` / 由消费方强制 `markFailed` 的契约写入文档；② `isRunning()` 读回 0 时提供可查询的「疑似已结束」标志；需在 `overall-test-cases.md` 登记「探针归 0 但状态未变」的用例 |
-| 8 | `--expose-internals` 默认值决策（默认 `flags` 不含它，而硬约束 ⑤ 要求它出现）⚠️ | §2.3 ⑤ · §5.3 `execArgv` · §D.8 ③ | 决策记录（库默认带上 / 消费方必须显式带）+ `flags` 默认值或文档同步更新；`overall-test-cases.md` 的 **TC-001-010** 由 ⚠️ 转 ✅ |
+| 8 | `--expose-internals` 默认值决策 ⚠️ | §2.3 ⑤ · §5.3 `execArgv` · §D.8 ③ | ✅ **已定案（2026-10-17）**：默认 `flags='--no-verify-heap'`（真机验证值）；`--expose-internals` 仅在载荷走 internal-module stub 路线时必需，由消费方显式传入（§3.5）。TC-001-010 转 ✅ |
 | 9 | 参数校验（`scriptPath` 非绝对、`logPath` 空串、`flags` token 超限） | §D.8 偏差（`cwd='/'`）· 硬约束 ③ · S4 | 非法输入返回结构化失败或明确告警日志（MUST NOT 静默接受）；边界用例 3/5 有确定结果 |
 | 10 | `compressNativeLibs` / `extractNativeLibs` 未在 `module.json5` 声明（`grep` 0 命中）⚠️ | §5.9 原生库压缩 · §1.2 关键结论 | 模块级声明存在（HAP 内 `.so` `compress_type=8`）；否则 HAP 体积门禁无依据（属 002/007 面，本清单仅登记） |
 | 11 | `failed` 状态的跨冷启动可见性（本模块无持久化；原生 `last-crash.json` 是唯一跨启动证据） | §5.2 失败后的恢复 · C5 · §5.7 | 冷启动后仍能回答「上次失败没有」：读 `<home>/node-bridge/last-crash.json` 或 AppStorage 标志，避免误判为首次启动 |
 | 12 | **`-1` 返回码双来源**：本模块状态守卫（`NodeRuntime.ets:65`）与原生第二道守卫（`node_bridge.c` `js_start`）同值 ⇒ 消费方可能误判来源 | §5.3 错误语义 · C2 | 二选一：① 本模块改用别的负值；② 在 `NodeStartResult` 增加来源字段并在契约中写明 |
 | 13 | **目录创建职责重叠**：`Env.ensureRuntimeDirs` 建 `<filesDir>/payload` + `<filesDir>/tmp`（`Env.ets:29-42`），原生 `js_start` 又建 `<home>/tmp` 与 `<home>/node-bridge` | §5.5 · §5.6 | 目录清单在文档与代码中唯一化（谁建什么写清）；`payloadRoot` 落地后不出现第三种布局 |
 | 14 | **版本下限可见告警**（`overall-test-cases.md` 的 TC-001-008 归属 001）：当前 `bridgeVersion()` 只回引导件版本，Node 版本只有载荷侧 `/facts` 可见 ⇒ 「`process.version < 22.19.0` 时可见 warn」无实现 | §5.8 版本要求（≥22.19.0 否则启动即 warn，**不静默**）· C2 | 低于下限的运行时启动后，调用方能在应用域看到明确告警（返回值或日志），TC-001-008 由 ⬜ 转 ✅；需新增 FR + 落地 |
-| 15 | **与 TC-001-009 的口径冲突** ⚠️：`overall-test-cases.md` 期待 `shutdown()` 期间出现 `stopping → stopped`，而本规格（§3.1 / FR-001-009）**明确拒绝**这两个状态 | §5.2 关停行 · §5.3 `NodeRuntimeState` | 二选一并回写：① 维持 4 态 ⇒ 修订 TC-001-009 的判据为「不出现 `stopping/stopped`」；② Phase 2 引入停止态 ⇒ 修订 FR-001-009 与 §4.1 迁移表 |
+| 15 | **与 TC-001-009 的口径冲突** ⚠️：`overall-test-cases.md` 期待 `shutdown()` 期间出现 `stopping → stopped`，而本规格（§3.1）曾拒绝这两个状态 | §5.2 关停行 · §5.3 `NodeRuntimeState` | ✅ **已消解（2026-10-17，路线②落地）**：实现为**六态**（`Types.ets:17-24`），`shutdown()` 标记 `stopping`；TC-001-009 可判（脚本侧收尾钩子仍标 Phase 2，不与状态枚举冲突） |

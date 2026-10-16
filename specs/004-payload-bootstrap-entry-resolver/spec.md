@@ -139,7 +139,7 @@
 | 实体 | 载体 / 类型 | 关键字段与约定 | 现状 |
 |---|---|---|---|
 | **载荷（Payload）** | 只读：`resources/resfile/<app>/` 目录树；可写：单个（可分卷）`*.tar.gz` | 形态二选一；只读优先；可写性判定见 FR-004-001/003 | ⬜ 仅 `pi-desktop-ark` 里存在空目录占位 + README（✅ `entry/src/main/resources/resfile/pi-web/README.md`） |
-| **载荷根（payloadRoot）** | 绝对路径字符串 | 可写路线的解包根；默认 `<filesDir>/node-bridge/payload`（规划 §5.3）；只读路线为 `bundleCodeDir` 派生路径 | ⬜ 规划字段未落类型（✅ `Types.ets:16-34` 无 `payloadRoot`） |
+| **载荷根（payloadRoot）** | 绝对路径字符串 | 可写路线的解包根；默认 `<filesDir>/payload`（**实现值**；规划 §5.3 草案的 `<filesDir>/node-bridge/payload` 已被取代，B6/R2）；只读路线为 `readonlyRoot`（默认 `context.resourceDir`） | ✅ 已实现（`Types.ets` `payloadRoot?`；`Env.payloadDir`） |
 | **入口（Entry）** | 绝对路径字符串 + `require`/`import` 结果 | 四条优先级（FR-004-019）；CJS/ESM 双通道；未 CJS/ESM 兼容前只有裸 `require` | ✅ 部分（`bootstrap.js:49-56`） |
 | **幂等 marker** | 文件 `<payloadRoot>/.ready-<sha256 前 12 位>`（JSON：完整 `sha256` + `files` + `bytes` + `skipped` + `at`） | 原子写（`.tmp.<pid>` → `rename`）；命中且目标目录存在 ⇒ 跳过；非法/缺失按缺失处理 | ✅ 已实现（`payload/bootstrap.js`；路径以冻结契约 §3.2 为准） |
 | **解包目标目录** | `<payloadRoot>/<sha256 前 12 位>/` | 目录幂等；路径穿越拒绝；跳过的条目计数随 marker 落盘（`skipped`） | ✅ 已实现（`payload/lib/tar-extract.js` + `bootstrap.js`） |

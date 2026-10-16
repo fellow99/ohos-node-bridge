@@ -42,10 +42,10 @@
 
 | 原则 | 判定 | 理由 / 证据 |
 |---|---|---|
-| **C1** 库/壳分离 | ✅ 合规 | 引导件只认识「运行时目录 / 入口脚本 / 参数串 / 家目录 / 日志路径」5 个通用入参（`node_bridge.c:126-133`），无窗口、无路由、无包名、无应用变量语义；`PI_*` 解释不出现（`payload/` 的 `PI_WEB_ENTRY` 属 `004`，已由 STRUCTURE §8.1 #3 登记 ⚠️） |
+| **C1** 库/壳分离 | ✅ 合规 | 引导件只认识「运行时目录 / 入口脚本 / 参数串 / 家目录 / 日志路径 / 环境变量对」6 个通用入参，无窗口、无路由、无包名、无应用变量语义；`PI_*` 解释不出现（`payload/` 的 `PI_WEB_ENTRY` 兼容别名已于 2026-10-17 删除，C1 / FR-004-020） |
 | **C2** 不隐藏平台真相 | ⚠️ 未达标（部分） | 投递失败（`pthread_create` 错误码）可见 ✅（`:261-266`）；但加载/符号解析失败只写日志、不回传（D8）、日志通道自身失效时静默（D7）、入参非法时静默继续（D2） |
 | **C3** 让最终使用者去读 | ✅ 合规（写侧） | 本模块是「写侧」：日志文件 + 崩溃记录均由**应用域**读回（`006` 的 `tail()` / `/facts`；沙箱日志 `hdc` 读不到 ⇒ 规划 附录 B #16） |
-| **C4** 启动参数不可事后修改 | ✅ 合规 | 参数只在投递时封送一次进上下文副本（`:239-245`），此后无任何追加/修改入口；C 侧 3 个符号中不存在改参 API（S8） |
+| **C4** 启动参数不可事后修改 | ✅ 合规 | 参数只在投递时封送一次进上下文副本，此后无任何追加/修改入口；C 侧 5 个符号（S8，2026-10-17 扩充）中不存在改参 API |
 | **C5** 单例与不可重启 | ⚠️ 未达标（部分） | C 侧无单次启动兜底、无「保留首次原因」（D1）；但**不提供**任何重启路径 ✅；崩溃是终态 ✅（handler re-raise，`:110-111`） |
 | **C6** 诊断优先于代码 | ⚠️ 未达标（部分） | 有 4 类可观测输出（hilog、日志文件、探针、`CRASH` 行）✅；但 `CRASH` 只有文本一行、无结构化落盘，且记录点只有信号（无阶段/时间戳/tid）（D10） |
 | **C7** 零上游补丁 / 二进制可替换 | ✅ 合规 | 只依赖 ELF 属性 + 入口符号名；不打补丁；换运行时只改 `runtime.lock.json`（附录 G.6 路线）；本模块用现成机制（env、`dlopen`、信号处理）而非 patch |
@@ -54,14 +54,14 @@
 
 | 规约 | 判定 | 理由 / 证据 |
 |---|---|---|
-| **S1** ArkTS 严格模式 + 原生只经 `.d.ts` | ✅ 合规 | 3 个符号的声明在 `cpp/types/libnode_bridge/index.d.ts:5-15`；`oh-package.json5` 的 `name = libnode_bridge.so` 与 import 说明符一致（`NodeRuntime.ets:2`）；本模块不新增 ArkTS 类型 |
+| **S1** ArkTS 严格模式 + 原生只经 `.d.ts` | ✅ 合规 | 5 个符号的声明在 `cpp/types/libnode_bridge/index.d.ts`（`start` 6 参，2026-10-17 扩充）；`oh-package.json5` 的 `name = libnode_bridge.so` 与 import 说明符一致（`NodeRuntime.ets:2`）；本模块不新增 ArkTS 类型 |
 | **S2** barrel 唯一出口 | ✅ 不受影响 | 本模块不导出 ArkTS 符号；消费面经 `001` 的 `NodeRuntime` 收口（`library/Index.ets`） |
 | **S3** 类型改动即破坏性变更 | ✅ 不触发 | 不改 `Types.ets`；若未来新增符号（D8 的回传），必须同步改 `Index.ets` / `Types.ets` / `specs/README.md`（宪法 §六 变更流程） |
 | **S4** 路径一律绝对 | ✅ 合规 | 引导件不调用 `getcwd`、不使用 `process.execPath`（真机 `/system/bin/appspawn`，规划 §D.8）；`argv` 里的脚本路径由调用方给出绝对路径，引导件只做拼接与长度校验 |
-| **S5** 信号上下文禁用 stdio | ⚠️ **违规**（D6） | `raw_write` 合规（`:53-60` 只裸 `open`/`write`/`close`）；但 `crash_handler` 用了 `snprintf`（`:103-107`）⇒ 必须改手写数字格式化（§9.2 D6）。`sigsys_handler` 合规（`:77-87` 无 stdio、无平台 API） |
+| **S5** 信号上下文禁用 stdio | ✅ **合规**（D6 已关闭，2026-10-17） | `raw_write_fd` 只裸 `write`；`crash_handler` 改用手写 `u64_to_dec`/`u64_to_hex` + `lb_append*` 拼栈缓冲 + **单次 `write()`**，0 命中 `printf`/`snprintf`/`vsnprintf`/`OH_LOG_Print`（`sig_name`/`stage_hint` 只剩纯比较）。`sigsys_handler` 亦合规（无 stdio、无平台 API） |
 | **S6** native 产物落点固定 | ✅ 合规（顺序待加固） | `CMakeLists.txt:10-11` 设置输出目录；⚠️ 该 `set()` 位于 `add_library()`（第 6 行）**之后**，而 CMake 文档口径是「变量在 target 创建时初始化属性」⇒ 当前正确性依赖工具链/构建系统行为（D11） |
 | **S7** 引导件不链接 libnode | ✅ 合规 | `CMakeLists.txt:16` 只链 NAPI + hilog；`readelf -d` 门禁见 §7.1 |
-| **S8** C 侧接口只有 3 个 | ✅ 合规 | `Init()` 只注册 `start`/`isRunning`/`version`（`:285-293`），`.d.ts` 三项一一对应 |
+| **S8** C 侧接口 = 5 个符号 | ✅ 合规 | `Init()` 注册 `start`/`isRunning`/`version`/`lastError`/`stage`（`start` 6 参，2026-10-17 扩充），`.d.ts` 与 `logs/20261016-1/IMPLEMENTATION_CONTRACT.md` §1.1 一一对应 |
 | **S9** 日志双通道 | ✅ 合规（写侧） | `log_line` 同时 `OH_LOG_Print` + 落盘（`:62-73`）；文件读取失败返回占位串不抛，属 `006` |
 | **S10** 二进制不入库 | ✅ 不触发 | 引导件由源码编译产生；`libnode.so`/`libc++_shared.so` 由 `provision.mjs` 投放，均不在 git / HAR（`.ohpmignore`、附录 G.1） |
 
@@ -82,7 +82,7 @@
 | R-04 | 拦截后返回**正好 `-1`** | 调用方把返回值当 fd 用；`-ENOSYS`/`-38` 会进入 fd 空间检查并触发 `assert(fd > STDERR_FILENO)`；同时 musl 的 `syscall()` 只在返回值落在 `[-4095,-1]` 时设置 errno ⇒ `-1` 恰好是「失败且不污染 errno」的形态（§5.10 ③④） | ① 返回 `-ENOSYS`（必崩，❌）② 返回 0（伪装成功，C2 违规，❌）③ 改 PC 不设返回值（调用方拿垃圾值，❌） |
 | R-05 | `dlopen` 用 `RTLD_NOW \| RTLD_GLOBAL` | `RTLD_GLOBAL` 让运行时的符号进入全局作用域，后续原生扩展（NAPI addon）才能解析 `napi_*` 等符号（R18 / P0-11）；`RTLD_NOW` 立即绑定，把「符号缺失」提前成**可见的加载失败**而不是运行中途崩 | ① `RTLD_LOCAL`（addon 解析失败，❌）② `RTLD_LAZY`（缺失符号延后到调用点崩，C6 不利）③ `RTLD_NOLOAD`（不存在即失败，无意义） |
 | R-06 | 裸名候选放在链尾是**现状**，应改为链首或至少保留 | HAP 内原生库实际落在 `/data/storage/el1/bundle/libs/arm64/`，**只有裸名 `libnode.so` 成功**，`<bundleCodeDir>/libs/arm64-v8a/…` 全失败（规划 §D.8 结论 4 / §D.9 ✅）。现状顺序是「先 3 个必然失败的绝对路径」，仅多 3 次失败 `dlopen`（D3） | ① 只留裸名（丢失「消费方把运行时投放在自定义目录」的场景）② 只留绝对路径（本机必败，❌）。**修正建议**：裸名优先，绝对候选作为兼容分支保留 |
-| R-07 | 崩溃处理器内**禁用 stdio** | 信号到达时 stdio 可能正持有内部锁（信号可在任意指令处到达）⇒ 在 handler 内调用会死锁或二次崩溃；同理平台日志 API 也不安全（S5 / §5.10 ②） | ① 用 `printf`/`snprintf`（现状 D6，违规）② 用 hilog（同样非信号安全）⇒ 唯一合规面是裸 `open`/`write`/`close` |
+| R-07 | 崩溃处理器内**禁用 stdio** | 信号到达时 stdio 可能正持有内部锁（信号可在任意指令处到达）⇒ 在 handler 内调用会死锁或二次崩溃；同理平台日志 API 也不安全（S5 / §5.10 ②） | ① 用 `printf`/`snprintf`（D6，**已于 2026-10-17 关闭**：改手写十进制/十六进制 + 单次 `write`）② 用 hilog（同样非信号安全）⇒ 合规面是裸 `open`/`write`/`close` + 无锁纯计算 |
 | R-08 | 处理完崩溃后 **re-raise**，不吞 | 吞掉会留下一个状态未知的进程（运行时已损坏），且掩盖真实故障；系统侧 `CppCrash` 上报与决策依赖默认处置（§D.8 用 `sig=5` 判 JIT 被 W^X 拒绝，正是靠默认处置留下的记录） | ① 吞掉继续跑（C2/C5 双违规，❌）② `_exit(1)`（丢失系统侧堆栈与上报，取证变差） |
 | R-09 | 崩溃处理器用 `SA_RESETHAND` | 保证「handler 自身再崩 ⇒ 不再重入 handler」，并确保 re-raise 时走默认处置；代码里再加一次 `signal(sig, SIG_DFL)` 作双保险（`:110`） | 不设 `SA_RESETHAND` + 手工 `signal()`：handler 重入窗口仍在（栈溢出连发信号场景） |
 | R-10 | 拦截器用 `SA_NODEFER` | 允许在 handler 内再次接收同类信号（拦截路径不该屏蔽自身；若目标指令判定失败需要可见地失败而不是被屏蔽） | 默认屏蔽：会把「连续 trap」表现为静默卡住（更差） |
@@ -127,7 +127,7 @@
 
 ### 4.4 常量
 
-`MAX_ARGS = 12`（`:41`）· `LOG_PATH_LEN = CTX_PATH_LEN = 512` · 候选串 640 B · `log_line` 行缓冲 1024 B（`:63`）· 崩溃记录缓冲 512 B（`:102`）· 栈 `32 MiB`（`:255`）· 候选数 4（`:160-165`）· 探针 `entries = 8`（`:155`）· `syscall 425`（`:155`）· 指令编码 `0xd4000001`（`:83`）· `LOG_DOMAIN 0xD003300` / `LOG_TAG "NODE_BRIDGE"`（`:38-39`）· 版本串 `node_bridge/0.1.0 (ohos-node-bridge)`（`:281`）。
+`MAX_ARGS = 12` · `LOG_PATH_LEN = CTX_PATH_LEN = 512` · 候选路径 640 B · `log_line` 行缓冲 1024 B · 崩溃记录缓冲 640 B · 栈 `32 MiB` · 候选数 4 · 探针入参 `8` · 被 trap 的调用号 `425` · 指令编码 `0xd4000001` · `LOG_DOMAIN 0xD0033` / `LOG_TAG "NODE_BRIDGE"`（**必须**与 ArkTS 侧 `Logger.ets` 的 `DOMAIN` 相同，A1/R2）· 版本串 `node_bridge/0.2.0 (ohos-node-bridge Phase 1)`。
 
 ---
 
@@ -137,12 +137,14 @@
 
 | 符号 | C 签名 | `.d.ts` 声明 | 返回值语义 |
 |---|---|---|---|
-| `start` | `js_start`（`:234-271`） | `start(libDir, scriptPath, flags, home, logPath): number`（`index.d.ts:5-11`） | `0` = 已投递到后台线程（**不代表已起来**）；非 `0` = `pthread_create` 的**错误码**（非负 errno 值） |
-| `isRunning` | `js_is_running`（`:273-277`） | `isRunning(): number`（`index.d.ts:13`） | `1` = 已进入运行时入口且未返回；`0` = 未进入/已返回 |
-| `version` | `js_version`（`:279-283`） | `version(): string`（`index.d.ts:15`） | `node_bridge/0.1.0 (ohos-node-bridge)`，构建期常量，排障第一读数 |
+| `start` | `js_start` | `start(libDir, scriptPath, flags, home, logPath, envPairs): number`（`index.d.ts`，**6 参**） | `0` = 已投递到后台线程（**不代表已起来**）；非 `0` = 校验/`pthread_create` 的**错误码**（非负 errno 值或 `-2` 非法参数） |
+| `isRunning` | `js_is_running` | `isRunning(): number`（`index.d.ts`） | `1` = 已进入运行时入口且未返回；`0` = 未进入/已返回 |
+| `version` | `js_version` | `version(): string`（`index.d.ts`） | `node_bridge/0.2.0 (ohos-node-bridge Phase 1)`，构建期常量，排障第一读数 |
+| `lastError` | `js_last_error` | `lastError(): string`（`index.d.ts`） | 最近一次原生层失败原因；无失败返回 `""`（C2，2026-10-17 扩充） |
+| `stage` | `js_stage` | `stage(): string`（`index.d.ts`） | `init`/`stdio`/`dlopen`/`dlsym`/`start`/`running`/`exited`（2026-10-17 扩充） |
 
 - 模块注册：`NAPI_MODULE(node_bridge, Init)`（`:295`）；import 说明符由类型包名决定（`types/libnode_bridge/oh-package.json5:2` → `libnode_bridge.so`），与 clang-tidy `misc-napi-macro-module-name` / `misc-napi-module-name` 的检查口径一致。
-- 参数全部为**字符串**；`argc` 上限 5，多余实参被忽略；缺省值见 §4.1。
+- 参数全部为**字符串**（`start` 6 参；`argc` 上限 6，多余实参被忽略）；缺省值见 §4.1；失败/截断均有可见证据（2026-10-17）。
 - 失败-可见性矩阵（现状）：
 
 | 失败点 | 日志（hilog / 文件） | 返回值 | 上游能否判定 |
@@ -164,7 +166,7 @@
 | 环境 | `setenv`×7（`:142-148`）+ `unsetenv`（`:149`） | §5.6：`UV_USE_IO_URING=0`、`HOME`/`USERPROFILE`、`TMPDIR`/`TMP`/`TEMP`、`NODE_ENV=production`、清空 `NODE_OPTIONS`；**不**改 `LD_LIBRARY_PATH` |
 | 文件/描述符 | `open`（`:55,108,185`）、`write`（`:57,109`）、`close`、`dup2`（`:187-188`）、`mkdir`（`:249`）、`setvbuf`（`:191-192`） | `O_WRONLY\|O_CREAT\|O_APPEND, 0644`；`stdout` 行缓冲、`stderr` 无缓冲 |
 | 系统调用直通 | `syscall(SYS_gettid)`（`:139`）、`syscall(425, 8, &p)`（`:155`） | 探针**只记录不判定**（§D.8：本机返回 8）；tid 用于排障 |
-| 格式化 | `vsnprintf`（`:66`）、`snprintf`（`:103,162-165,202,205,211,246-249`）、`strtok`（`:203,208`） | 均在**非**信号上下文；handler 内的 `snprintf` 违规（D6）；`strtok` 非线程安全（D12） |
+| 格式化 | `vsnprintf`（`log_line`）、`snprintf`（候选链/参数装配等） | 均在**非**信号上下文；崩溃 handler 内 **0 命中**（D6 已于 2026-10-17 关闭）；`strtok` 非线程安全（D12） |
 | 平台日志 | `OH_LOG_Print`（`:69`） | 只在 `log_line` 内（非信号上下文），`%{public}s` + 域/标签见 §4.4 |
 | NAPI | `napi_get_cb_info` / `napi_get_value_string_utf8` / `napi_create_int32` / `napi_create_string_utf8` / `napi_define_properties`（`:234-292`） | 返回值/`status` 多数未检查（D2） |
 
@@ -253,7 +255,7 @@ if (insn == 0xd4000001) { regs[0] = (uint64_t)-1; pc += 4; }   // 其余分支�
 **④ 崩溃取证写入路径（`:100-112`）**
 
 ```
-snprintf(buf, 512, "CRASH sig=… si_addr=… pc=… lr=… sp=… r0=…")   // D6：违反 S5
+lb_append* 手写组装 "CRASH sig=… si_addr=… pc=… lr=… sp=… r0=…"   // 2026-10-17：D6 已关闭（原实现为 snprintf）
 fd = g_log_path[0] ? open(g_log_path, O_WRONLY|O_CREAT|O_APPEND, 0644) : -1
 if (fd >= 0) { write(fd, buf, strlen(buf)); close(fd); }           // 无 fsync（可接受：进程即将终止）
 signal(sig, SIG_DFL); raise(sig);                                   // 交还默认处置
@@ -298,8 +300,8 @@ Phase 1 目标：改为「裸写 + 结构化 JSON 双落点」，见 §9.1 ②�
 |---|---|---|---|
 | H1 | 链接面 | `readelf -d library/libs/arm64-v8a/libnode_bridge.so \| grep NEEDED` ⇒ 只有 `libace_napi.z.so`、`libhilog_ndk.z.so`（**无** `libnode.so`，S7） | 代码 ✅ / 门禁 ⬜（无脚本） |
 | H2 | 落点 | 产物路径 = `library/libs/arm64-v8a/libnode_bridge.so`（S6；不设输出目录则 HAP 内无 `libs/`，附录 B #12） | ✅（HAR 条目印证） |
-| H3 | 符号面 | `strings` 断言存在 `_ZN4node5StartEiPPc`、`node_bridge`、`node_bridge/0.1.0 (ohos-node-bridge)`、`UV_USE_IO_URING`、`NODE_ENV`、`NODE_OPTIONS`、`io_uring_setup(425)`、`CRASH sig=`；`readelf -x .init_array` 非空（NAPI 模块构造函数） | ⬜ |
-| H4 | **信号安全门禁**（S5） | 抽取两个 handler 的函数体，断言 0 命中 `printf\|snprintf\|vsnprintf\|OH_LOG_Print\|malloc\|free` | ⬜ **当前会红**（D6） |
+| H3 | 符号面 | `strings` 断言存在 `_ZN4node5StartEiPPc`、`node_bridge`、`node_bridge/0.2.0 (ohos-node-bridge Phase 1)`、`UV_USE_IO_URING`、`NODE_ENV`、`NODE_OPTIONS`、`io_uring_setup(425)`、`CRASH sig=`；`readelf -x .init_array` 非空（NAPI 模块构造函数） | ⬜ |
+| H4 | **信号安全门禁**（S5） | 抽取两个 handler 的函数体，断言 0 命中 `printf\|snprintf\|vsnprintf\|OH_LOG_Print\|malloc\|free` | ✅ **已过**（2026-10-17：`crash_handler` 只用 `u64_to_dec/hex` + `lb_append*` + 单次 `write`；见 R2） |
 | H5 | 编译告警 | `-Wall -Wextra`（建议再加 `-Werror`）下 0 告警 | ⬜ 现状未开（NFR-002-05） |
 | H6 | 静态检查 | 仓库根 clang-tidy 9 项 + clangd `UnusedIncludes: Strict` 通过；重点 `misc-napi-module-name` / `misc-napi-macro-module-name`（模块名与 import 名一致）、`misc-unused-parameters` | ⬜ 未纳入流水线 |
 | H7 | 边界单测（argv / 候选链 / SIGSYS 判定） | 把 `bootstrap` 的 argv 段与 handler 判定抽成可测函数，在 host 上用桩替换 `dlopen/dlsym`：断言 argc、哨兵位置、丢弃告警、`insn==0xd4000001` ⇒ `regs[0]==(uint64_t)-1 && pc==old+4` | ⬜ 无测试基建（`tests/smoke-host.mjs` 不存在） |
@@ -357,7 +359,7 @@ Phase 1 目标：改为「裸写 + 结构化 JSON 双落点」，见 §9.1 ②�
 | `.clang-tidy`（仓库根） | **1** | 9 项检查（NAPI 命名、未用变量/参数、系统能力等） |
 | `.clangd`（仓库根） | **16** | 诊断与 clang-tidy 选项、`UnusedIncludes: Strict` |
 | 根 `build-profile.json5` | **61** | `nativeLib.collectAllLibs=true`（HAR 会带 `libc++_shared.so`）、SDK 口径、签名配置 ⚠️（见 STRUCTURE §8.1 #1） |
-| `library/src/main/ets/runtime/NodeRuntime.ets` | 115 | **下游**：唯一允许的接入点（调用 3 个符号） |
+| `library/src/main/ets/runtime/NodeRuntime.ets` | 798 | **下游**：唯一允许的接入点（消费 5 个符号） |
 | `library/src/main/ets/runtime/Types.ets` | 49 | 下游类型契约（S3；本模块不触发变更） |
 | `library/src/main/ets/log/Logger.ets` | 53 | 下游：hilog 双通道 + `tail()` 读回 |
 | `library/src/main/ets/util/Env.ets` | 65 | 下游：沙箱路径（`logPath`/`filesDir` 来源，S4） |
@@ -379,7 +381,7 @@ Phase 1 目标：改为「裸写 + 结构化 JSON 双落点」，见 §9.1 ②�
 | ③ | **加载/符号/入口返回值回传 ArkTS** | C2 · spec FR-002-027 | A) 新增回传面（如 `lastError(): string` 或回调）后，缺库 / 缺符号 / 入口提前返回三种场景下，ArkTS **不读日志**即可拿到 `{stage, code, detail}`；B) 同步更新 `index.d.ts` + `specs/README.md` 编号表（S8 + 宪法 §六 变更流程）；C) **`detached` 线程返回值不可回收** ⇒ 必须走共享状态（原子/受锁结构）而非线程返回值；D) 重复调用语义与 `001` 状态机一致（`FAILED` 携带原因） |
 | ④ | **`--inspect` 仅 debug 构建** | §5.7 · TECH §5 #5 · 旧壳 R7 | release 构建下 `flags` 含 `--inspect` 时必须**拒绝并记日志**（不能只靠文档约定）；debug 下可用 `hdc fport tcp:9229` + DevTools 连上并 `Runtime.evaluate` |
 | ⑤ | **多版本 `libnode.so` 的 SONAME 处理** | R18 · P0-11（⬜ 未验）· 锁文件 `soname=libnode.so.137` / `deployAs=libnode.so` | 见 §7.4 末条判据；结论必须写回规划 §5.8 / 附录 G.7 |
-| ⑥ | **默认 `flags` 与规划口径统一** | §5.3（缺省含 `--expose-internals`）· §4.2 ⑤ · TECH §5 #4 → D13 | 缺省参数必须同时包含 `--no-verify-heap` 与 `--expose-internals`（或由 `001` 显式传入并在文档中定死来源）；真机验证 `require('internal/modules/cjs/loader')` 成功（附录 B #6 的反例不得出现） |
+| ⑥ | **默认 `flags` 定案（偏差已记录）** | §5.3（草案缺省含 `--expose-internals`）· §4.2 ⑤ · TECH §5 #4 | **已定案**：库默认 `flags = '--no-verify-heap'`（真机验证过的值，最小可用集）；`--expose-internals` **只在载荷走 internal-module stub 路线时才必需**，由消费方经 `flags`/`execArgv` 显式传入（规划 §5.3 草案默认值被本行取代；不再算不一致） |
 
 ### 9.2 缺陷登记（评审必读：现状与代码/规划不一致或真实风险）
 
@@ -390,14 +392,14 @@ Phase 1 目标：改为「裸写 + 结构化 JSON 双落点」，见 §9.1 ②�
 | **D3** | 候选顺序与 §D.8「应优先裸名」相反 | `:162-165` | 每次启动多做 3 次必败 `dlopen`（并写 3 行噪声日志）；掩盖「库不在搜索路径」的真因 | 裸名置首（绝对候选保留为兼容分支）；或命中裸名后短路。Phase 1（FR-002-010） |
 | **D4** | 拦截器遇**非目标指令**直接返回 ⇒ **无限重投同一故障**（活锁） | `:83-86` | 设备/内核行为差异时表现为「启动卡死无输出」，最难查的一类 | 未命中分支：裸写一行标记 → `signal(SIGSYS, SIG_DFL)` → `raise(SIGSYS)`（可见失败，不静默）。Phase 1（FR-002-014） |
 | **D5** | 探针把内核写回的 `struct io_uring_params`（120 B）写进 **8 B** 的局部变量 `void *p`；成功时不关闭返回的 fd | `:153-156` | 无 trap 机型（**本机就是这样**）⇒ **栈越界写** + fd 泄漏（当前 `rc=8` 未被使用也未关闭） | 传入 ≥256 B 对齐缓冲（`char pbuf[256] __attribute__((aligned(8)))`）；`rc >= 0` 时 `close(rc)`。Phase 1（FR-002-016） |
-| **D6** | 崩溃处理器内用 `snprintf`（stdio，非信号安全） | `:103-107` | 违反 **S5**；信号到达时若 stdio 持锁 ⇒ 死锁/二次崩溃 ⇒ **丢了本该留下的崩溃证据** | 手写十进制/十六进制格式化（约 15–25 行）后只裸写；加 H4 门禁。Phase 1（FR-002-022 / NFR-002-01） |
+| **D6** | 崩溃处理器内用 `snprintf`（stdio，非信号安全） | 历史：`:103-107`（行号属旧快照） | 违反 **S5**；信号到达时若 stdio 持锁 ⇒ 死锁/二次崩溃 ⇒ **丢了本该留下的崩溃证据** | ✅ **已修（2026-10-17）**：手写 `u64_to_dec`/`u64_to_hex` + `lb_append*` + 单次 `write`；H4 门禁已过（FR-002-022 / NFR-002-01） |
 | **D7** | 日志通道失效全静默 | `raw_write` `:56`、`dup2` 分支 `:185-190`、`mkdir` `:249`、投递失败清空 `:263` | 目录不存在/无权限时「启动了但没有任何日志」，与 C2 冲突；载荷侧表现为莫名的 `ENOENT` | 打开失败时至少 `OH_LOG_Print` 一条降级提示（非信号上下文）并置可见状态。Phase 1（FR-002-024） |
 | **D8** | 加载/符号/入口返回值不回传；`detached` 线程返回值**不可回收** | `:167-183`（失败只 `return NULL`）、`:220-223` | 上游 `state=FAILED` 只能靠日志文本或探活超时推断；「靠 pthread 返回码」在本实现里**不成立**（`pthread_detach` 已丢弃返回值） | 共享状态 + 可选 threadsafe function 回传（§9.1 ③）。Phase 1（FR-002-027） |
 | **D9** | 日志文件**无上限、无轮转**；与宿主渲染组件的原生输出**混流**同一 fd | `:185-190` · §D.10 ⑱ | 长跑会话下沙箱磁盘增长不可控；诊断时噪声淹没 Node 输出 | §9.1 ①（管道 + 通道分离）+ 消费方/`006` 侧轮转策略。Phase 1/2 |
 | **D10** | 崩溃取证面不足：无 backtrace/`dladdr`、无阶段/时间戳/tid、安装时机在 `start` 时、覆盖他人已装 handler；release 未配置保留 native 符号 | `:100-122`（安装）、`:119`（覆盖语义）· §5.10 ⑬ 要求 `nativeLib.debugSymbol.strip=false`（`library/build-profile.json5` 未配） | `pc/lr` 在 strip 后难以符号化 ⇒ 取证价值下降 | 结构化 JSON（§9.1 ②）+ `library/build-profile.json5` 增加符号保留配置（属构建配置，需评审后改）。Phase 1/2 |
 | **D11** | `set(CMAKE_LIBRARY_OUTPUT_DIRECTORY …)` 位于 `add_library()` **之后** | `CMakeLists.txt:6` vs `:10-11` | CMake 文档口径是「变量在 target 创建时初始化属性」⇒ 落点正确性依赖工具链/构建系统行为（as-built 已实测产物在 `library/libs/arm64-v8a/` ✅，故为**潜在**风险而非现行故障） | 把 `set()` 提到 `add_library()` 之前（零成本消除顺序依赖）。Phase 1（FR-002-025 / S6） |
 | **D12** | `strtok` 非线程安全（使用内部静态状态） | `:203,208` | 同进程其他线程并发调用 `strtok` 时会互相破坏（当前窗口很短，风险低） | 换 `strtok_r`。Phase 1 |
-| **D13** | 默认 `flags` 与规划 §5.3 不一致（缺 `--expose-internals`） | `:246` · `NodeRuntime.ets:76` | 缺它 ⇒ `internal/modules/*` 全 `MODULE_NOT_FOUND`（附录 B #6） | 统一缺省值来源（§9.1 ⑥） |
+| **D13** | 默认 `flags` 与规划 §5.3 草案不一致（缺 `--expose-internals`） | `js_start` · `NodeRuntime.ets` | 缺它 ⇒ 走 stub 路线的载荷 `internal/modules/*` 全 `MODULE_NOT_FOUND`（附录 B #6） | ✅ **已定案（2026-10-17）**：默认值保持 `--no-verify-heap`（真机验证值）；`--expose-internals` 仅在 stub 路线必需，由消费方显式传入（见 §9.1 ⑥） |
 | **D14** | 拦截器无条件解引用 PC（无保护读） | `:82` | 若故障 PC 落在不可读页（野跳转/栈溢出后），handler 内二次 SIGSEGV ⇒ 证据丢失 | 命中前先判定 PC 有效性（如 `msync`/`signal` 保护窗口，或至少用一次性 `sigsetjmp` 兜底）。Phase 2（⬜ 属加固项，不在 Phase 1 范围） |
 
 ### 9.3 明确**不做**（非目标，避免评审误判为缺项）

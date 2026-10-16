@@ -44,10 +44,10 @@
 | # | 原则 | 判定 | 理由（落到本模块） |
 |---|---|---|---|
 | **C1** | 库/壳分离 | ✅ | HAR 内无窗口/页面/路由/ArkWeb/包名/签名主体/鉴权/`pi` 语义：`library/` 全树只有 `runtime`/`bridge`/`log`/`util` + `cpp`；样例只在 `samples/`（§7.2 纪律）。发布物**语言层面**也拦得住：应用语义字符串 0 命中 |
-| **C2** | 不隐藏平台真相 | ⚠️ | 「拿不到运行时」是硬失败（`provision.mjs` `exit 2` + 三条出路）✅；但**库运行期没有版本可见性**：`bridgeVersion()` 返回的是引导件串 `node_bridge/0.1.0`（`node_bridge.c:281`），**不是** `process.version`；`>=22.19.0` 只在构建期门禁检查（`runtime.lock.json:41`）。⇒ Phase 2 必须把「运行时版本可用性」做成可见标志（spec FR-007-008） |
+| **C2** | 不隐藏平台真相 | ⚠️ | 「拿不到运行时」是硬失败（`provision.mjs` `exit 2` + 三条出路）✅；但**库运行期没有版本可见性**：`bridgeVersion()` 返回的是引导件串 `node_bridge/0.2.0 (ohos-node-bridge Phase 1)`，**不是** `process.version`；`>=22.19.0` 只在构建期门禁检查（`runtime.lock.json`）。⇒ Phase 2 必须把「运行时版本可用性」做成可见标志（spec FR-007-008） |
 | **C3** | 谁写谁读 | ✅ | 发布物层面：`Env.materializeRawfile` 注释写明「Node 读不到包内只读条目」并给出 `resfile` 直读首选（`Env.ets:44-50`）；`payload/README.md:17-21` 把「Node 自己解包」写成契约；`Logger.tail` 提供读回通道（`Logger.ets:27`） |
 | **C4** | `execArgv` 启动即固定 | ✅ | `NodeRuntimeOptions.flags` 是一次性输入（`Types.ets:17-25`），barrel 上**没有**任何 push/追加参数的 API（`Index.ets` 全量导出面见 §4.3） |
-| **C5** | 单例不可重启 | ⚠️ | 单例 + 幂等保护 ✅（`NodeRuntime.ets:20-31`、`:62-69` 二次 `start()` 返回失败并保留首次原因）；**缺 `shutdown()`**：规划 §5.2 要求 `shutdown()`（触发 Node 侧 `onShutdown` 钩子），当前类里没有该方法 ⇒ Phase 2 补（否则「优雅关停」这条承诺在发布物里不可见） |
+| **C5** | 单例不可重启 | ✅ | 单例 + 幂等保护 ✅（`NodeRuntime.ets` 二次 `start()` 返回失败）；`shutdown(reason)` 已实现（只标记 `stopping` + 记 reason + warn「进程内无法优雅停止」，**不假装能停**）；无任何重启路径 ✅；Node 侧 `onShutdown` 钩子仍属 Phase 2 |
 | **C6** | 诊断优先于修码 | ✅ | 崩溃结构化证据（`node_bridge.c:100-112` 的 `CRASH sig= si_addr= pc= lr= sp= r0=`）+ 真机判据写在 `tests/README.md:18-28`；发布物不承诺「点击看起来生效」类判据 |
 | **C7** | 零补丁 & 二进制可替换 | ✅ | 无上游补丁；换运行时只改 `runtime.lock.json`（`active` + `runtimes[]`）+ 重跑门禁；引导件与运行时版本解耦（S7）；供应链记录齐备（来源/SHA-256/许可/`verifiedOn`/`verifiedDevice`） |
 
@@ -59,11 +59,11 @@
 | S2 | barrel 唯一出口 | ⚠️ | 出口存在且唯一 ✅；但导出面把 `Env`/`Logger`（内部工具类）一起暴露 ⇒ 契约面膨胀（R15）。建议：`0.2.0` 起把二者降为「**不承诺稳定**」并在表里标注（§4.3 已标注），新增符号前先登记 |
 | S3 | 类型改动即破坏性变更 | ✅ | `Types.ets:1-5` 文件头写明；4 个声明全部在 barrel 上 |
 | S4 | 路径一律绝对 | ✅ | `Env` 全部以 `context.filesDir` 为根拼绝对路径（`Env.ets:15-27`）；`payload/bootstrap.js:27` 注释明确「`cwd` 只用于日志」 |
-| S5 | 信号上下文禁用 stdio | ✅ | `raw_write` 只用裸 `open/write/close`（`node_bridge.c:53-60`）；`log_line`（用 `vsnprintf`+`OH_LOG_Print`）只在非信号路径调用；崩溃 handler 内只 `snprintf`+`write`（`:103-109`）⚠️ 严格说 `snprintf` 也在 handler 内，Phase 2 建议改为纯手写数字（§5.10 ② 的更严口径） |
+| S5 | 信号上下文禁用 stdio | ✅ | `raw_write_fd` 只用裸 `write`；`crash_handler` 已改手写 `u64_to_dec`/`u64_to_hex` + `lb_append*` + **单次 `write()`**（2026-10-17，D6 关闭）；`log_line`（用 `vsnprintf`+`OH_LOG_Print`）只在非信号路径调用 |
 | S6 | native 产物落点固定 | ✅ | `CMakeLists.txt:10-11` 显式设 `CMAKE_LIBRARY_OUTPUT_DIRECTORY` → `<module>/libs/${OHOS_ARCH}`；实测 `library/build/.../intermediates/libs/default/arm64-v8a/libnode_bridge.so` 与 HAR 内 `libs/arm64-v8a/` 一致 |
 | S7 | 引导件不链接 libnode | ✅ | `CMakeLists.txt:16` 只链接 NAPI + hilog；`node_bridge.c:159-172` 运行期 `dlopen`，且**裸名兜底**在候选表最后 |
-| S8 | C 侧接口只有 3 个 | ✅ | `node_bridge.c:285-293` 注册 `start`/`isRunning`/`version`，与 `index.d.ts` 逐项一致 |
-| S9 | 日志双通道 | ⚠️ | hilog ✅（`Logger.ets:14-24`）+ 文件 ✅（原生 `dup2` → `node.log` / 崩溃 handler 追加）；但**重定向 ≠ 排空**：`node_bridge.c:14-15` 自述待升级项（1 MB pipe + 独立 reader 线程，§5.10 ⑤ / R19）⇒ Phase 2 必修，否则大输出会阻塞 ArkWeb IO |
+| S8 | C 侧接口 5 个（`start` 6 参，2026-10-17 扩充） | ✅ | `node_bridge.c` `Init()` 注册 `start`/`isRunning`/`version`/`lastError`/`stage`，与 `index.d.ts` 逐项一致 |
+| S9 | 日志双通道 | ✅ | hilog ✅（`Logger.ets`）+ 文件 ✅（C 侧 `write_line()`/常开 fd，`<stream> <epochMs> <text>` 单次 write）；stdio 已改 **1 MB pipe + 独立 reader 线程持续排空**（含组件输出过滤），不再有「大输出阻塞 ArkWeb IO」问题 |
 | S10 | 二进制不入库 | ✅ | 根 `.gitignore:17-24`（`**/libnode.so`、`**/libc++_shared.so`、`library/libs/`、`library/src/main/libs/`、`*.har`）+ `library/.ohpmignore:11`；实测 HAR 内无 `libnode.so` |
 
 ### 2.3 合规红线

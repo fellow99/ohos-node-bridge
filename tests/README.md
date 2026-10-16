@@ -59,7 +59,7 @@ hdc fport tcp:15577 tcp:15577
 curl -s http://127.0.0.1:15577/facts | python -m json.tool
 
 # 另外三条读回通道
-curl -s http://127.0.0.1:15577/log                       # 日志尾 8192 B（含 CRASH 行）
+curl -s http://127.0.0.1:15577/log                       # 日志尾（当前按 UTF-16 码元切 8192；见契约 §3.6 与 006 plan 缺陷 #11）
 curl -s -X POST --data 'ping' http://127.0.0.1:15577/rport  # 转发到 127.0.0.1:${RPORT_PORT}（缺省 19999）
 curl -s http://127.0.0.1:15577/diag                      # 诊断面（契约 §3.6 端点表外的扩展）
 hdc shell hilog -x | grep -E "node-bridge|Cpp Crash"     # 辅助留档（**不作反证据**，见 §禁止的判据）

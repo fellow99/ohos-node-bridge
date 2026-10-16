@@ -40,7 +40,7 @@
 | 原则 | 结论 | 依据 |
 |---|---|---|
 | **C1 库/壳分离** | **合规**：`tools/` 与 `runtime.lock.json` 不含任何宿主语义（无 `PI_*`、无窗口/路由）；`provision.mjs` 打印的「下一步」只是构建命令 | `provision.mjs:338` |
-| **C2 不隐藏平台真相** | **基本合规，一处缺口**：失败一律 stderr + `exit 2`；缺 `libc++_shared.so` 时明说「`dlopen` 会**静默失败**」；缺产物时给三条出路；代理未开时打印正确命令。⚠️ 缺口：`elf-inspect.py` 的 `VERDICT: FAIL` **仍返回 0**（§6.3-⑪），CI 若直接把它当门禁会**假绿** | `provision.mjs:49,255,258-266,302-303` · `elf-inspect.py:165` |
+| **C2 不隐藏平台真相** | **✅ 合规（2026-10-17 缺口已补）**：失败一律 stderr + `exit 2`；缺 `libc++_shared.so` 时明说「`dlopen` 会**静默失败**」；缺产物时给三条出路；代理未开时打印正确命令；`elf-inspect.py` 的 `VERDICT: FAIL` 现返回 **2**（A2/R2）；截断/目录/URL 等异常输入给一行 `✗` 而非堆栈（A3/A4/R2） | `provision.mjs` · `elf-inspect.py` |
 | **C3 让最终使用者去读** | **合规**：幂等判定就是「**读回**目标文件的 SHA-256 再比」（不是「我拷过了」）；`--sign` 之后当场对**落地文件**跑 `verify` | `provision.mjs:292,307,333` |
 | **C4 启动参数不可事后修改** | **不适用**：本模块不装配 `execArgv`，也不提供运行期改参数的路径 | — |
 | **C5 单例不可重启** | **不适用**：纯 host 侧工具；也不输出任何「崩了自动重投/自动重试」的暗示 | — |
@@ -51,7 +51,7 @@
 | **S5 信号上下文禁用 stdio** | **不适用**（无 C 代码） | — |
 | **S6 native 产物落点固定** | **相邻模块（002）**；本模块的 `--out` 要与它一致（`<module>/libs/${OHOS_ARCH}`） | 规划 §5.9 |
 | **S7 引导件不链接 libnode** | **相邻模块（002）**；本模块的投放顺序不假设任何链接关系 | — |
-| **S8 C 侧只有 3 个接口** | **不适用** | — |
+| **S8 C 侧接口 5 个**（2026-10-17 扩充） | **不适用** | — |
 | **S9 日志双通道** | **类推适用**：progress 走 stdout、失败走 stderr；`--quiet` 只静默 stdout（**不静默失败**） | `provision.mjs:47-49` |
 | **S10 二进制不入库** | **合规（本模块的核心）**：120.9 MiB 产物**只**存在于 `../ohos-node-runtime/`（父工程 `.gitignore`）与消费方 `libs/<abi>/`；仓库里只有锁文件 + 工具；HAR 侧另有 `library/.ohpmignore:11` | 附录 G.1 · STRUCTURE §8 |
 | **G3 不含浏览器内核** | 不引入任何渲染物 | — |
@@ -240,7 +240,7 @@ PIE 产物**能 `dlopen` 成功**，但 V8 在 `Isolate::Initialize` 的**首次
 | `provision.mjs` | `0` | 校验/投放成功（含幂等跳过） |
 | | `2` | 硬失败：锁缺失/非法、版本不存在、非 ELF、门禁不过、SHA 不符、缺 `libc++_shared.so`、缺 `--out`、下载全败、**未捕获异常**（经 `main().catch` → `fail()`） |
 | `ohos-selfsign.mjs` | `0` / `1` / `2` / `3` | 正常 / `verify`/`selftest` 失败 / 用法错误 / 异常 |
-| `elf-inspect.py` | `0` / `2` | 解析成功（⚠️ **含 VERDICT FAIL**）/ 非 ELF 或 32 位 |
+| `elf-inspect.py` | `0` / `2` | 解析成功且 **VERDICT PASS** / VERDICT FAIL（含非 ELF、32 位、门禁不过、解析异常——一行 `✗` 提示）。A2/A4/R2 修正：此前 FAIL 也返回 0 | 
 
 **输出文本契约（稳定格式，便于 grep 与 CI 断言）**
 
@@ -350,10 +350,10 @@ descriptor(256 B)：[0]=1 version · [1]=1 SHA-256 · [2]=12 log2BlockSize · [3
 | ⑦ | 缺 `--out` | `✗ 缺少 --out <模块>/entry/libs/<abi>（或用 --check 只校验）` | 2 | ✅ 代码路径 `:286` |
 | ⑧ | 找不到 `libc++_shared.so` | `✗ 找不到 … 用 --sdk … （缺它 dlopen 会**静默失败**，症状是 ArkTS 侧只拿到 undefined）` | 2 | ✅ 代码路径 `:301-304` |
 | ⑨ | 下载来源全失败 | `✗ 全部下载来源均失败：- <url> → <msg>` **+ 代理提示**（未开 `NODE_USE_ENV_PROXY` 时打印可粘贴命令） | 2 | ⚠️ 文本未在本机触发（无代理变量，路径 `:247-256`）⬜ |
-| ⑩ | 本地找不到产物 | 三条出路：a) 手工放入（给出**首选路径**）b) `--from <path\|url>` c) `--download`（附上游 URL） | 2 | ✅ 代码路径 `:258-266`（文本口径见 D-4：`--from` 实际不吃 URL） |
-| ⑪ | `elf-inspect.py` 判 `VERDICT: FAIL` | 打印 `FAIL -> …`，但 **`exit 0`** ⚠️ | 0 | ⚠️ D-10（CI 假绿风险） |
-| ⑫ | 产物长度 < 头部声明（截断/畸形） | **原始堆栈**：`RangeError [ERR_OUT_OF_RANGE] … at u64 (provision.mjs:90)` | 2 | ⚠️ D-5 实测 |
-| ⑬ | `--from` 指向不存在的路径 / 目录 / URL | **原始堆栈**（`ENOENT … stat '…'` / `EISDIR`），没有友好提示 | 2 | ⚠️ D-4 实测 |
+| ⑩ | 本地找不到产物 | 三条出路：a) 手工放入（给出**首选路径**）b) `--from <path\|url>` c) `--download`（附上游 URL） | 2 | ✅ 代码路径 + **A3/R2 已实现 `--from` 吃 URL**（走 `acquire()` fetch 路径；实测 `http://127.0.0.1:18777/libnode-arm64.so` → 门禁全过 exit 0） | 
+| ⑪ | `elf-inspect.py` 判 `VERDICT: FAIL` | 打印 `FAIL -> …`，**退出码 2**（A2/R2 修正） | 2 | ✅ D-10 已关闭 |
+| ⑫ | 产物长度 < 头部声明（截断/畸形） | **一行 `✗ 无法读取/解析 ELF：<path> —— <原因>`**（A4/R2 修正；不再有 `RangeError` 堆栈） | 2 | ✅ D-5 已关闭 |
+| ⑬ | `--from` 指向不存在的路径 / 目录 / URL | 目录 ⇒ 一行 `✗ … 不是普通文件（目录？）`；畸形/读失败 ⇒ 一行 `✗ …`；URL ⇒ 走 fetch（失败给一行 `✗ … 下载失败` + 代理提示） | 2 | ✅ A3/A4 已关闭（D-4/D-5） |
 | ⑭ | `--sign` 子步骤失败 | `✗ add-section 失败` / `✗ 自签失败` / `✗ 自签后验签失败` | 2 | ✅ 代码路径 `:326,331,334` |
 | ⑮ | 对**已签名**目标重复投放 | 打印「+ 投放」并把签名版**覆盖**回未签名版（幂等判据是 `目标 sha == 源 sha`） | 0 | ⚠️ D-6 实测 |
 
@@ -431,13 +431,13 @@ descriptor(256 B)：[0]=1 version · [1]=1 SHA-256 · [2]=12 log2BlockSize · [3
 | **D-1** | 🟨 | **编号/目录名不一致**：规划 §7.3 与 `specs/README.md:21`、`STRUCTURE.md:214` 都写 `005-provision-verify`；实际目录是 `005-provision-verify-elf-gates` | 三处文档 vs 本目录名 | 统一（本规格只写任务指定的目录，未改其它文件）；同步 `specs/README.md` 编号表与 `STRUCTURE.md §7` |
 | **D-2** | 🟨 | **「规划有脚本、实现走 hvigor」**：规划 §7.4 步骤② 写 `node tools/build-bridge.mjs --abi arm64-v8a`（⬜ Phase 1），步骤③ 写 `node tools/smoke-host.mjs`；**两个文件都不存在**，引导件实际由 hvigor 的 `library/build-profile.json5 → externalNativeOptions → cpp/CMakeLists.txt` 直接编出 | `ls tools/` 只有 3 个文件（本模块三件套）；规划 §7.4 自带 ⬜ 标记 | 在 `002-napi-bootstrap` 与 `007-distribution` 规格里写清「Phase 1 才补脚本」；另注意 §7.4 步骤① 的 `--out library/src/main/libs/arm64-v8a` 与实际 CMake 输出 `library/libs/arm64-v8a`（STRUCTURE §8.1）是**两个不同目录**，`--out` 取值需与 002 对齐 |
 | **D-3** | 🟧 | **版本项口径不一**（三处）+ **`gates` 无人读**：规划 §5.8/锁文件要求 `process.version ≥ 22.19.0`；门禁⑦ 只查「大小一致 + 版本串存在」；`elf-inspect.py` 六项无版本项；`entry.gates` 在 `tools/` 里零引用 ⇒ 存档可静默漂移 | `provision.mjs:185` · `elf-inspect.py:142-164` · `grep -c gates tools/*` | 二选一：① 实现真比较（解析 `.rodata` 版本串做数值比较，或把 `gates.versionGeq2219` 从锁里删掉/改名成 `versionStringPresent`）；② 把规划 §5.8 的措辞降级为「版本串存在 + 由真机 `/facts` 验证引擎版本」 |
-| **D-4** | 🟧 | **`--from <url>` 名义支持、实际按本地路径**：`--from` 的值直接进 `statSync/readFileSync`，`acquire()`（唯一会 `fetch` 的地方）只在 `--download` 分支被调用 ⇒ 传 URL 得到 `ENOENT … stat 'D:\…\https:\127.0.0.1:1\x.so'` 的**原始堆栈** | `provision.mjs:15`（注释写 `<path\|url>`）· `:234-237` vs `:215-226`；实测 | 要么实现（`--from` 命中 `http(s)://` 时走 `acquire`），要么把注释与 §G.3 表格里的 `--from <path｜url>`、错误提示 ⑩ 的 `<path\|url>` 全部改成 `<path>` |
-| **D-5** | 🟥 | **畸形/截断 ELF 抛原始堆栈**：`elfGate` 不做长度边界校验，头部声明的偏移超出实际长度即 `RangeError [ERR_OUT_OF_RANGE]`（≈90 行堆栈）。同类：`--from` 指向目录（`EISDIR`） | 实测：`head -c 1,000,000` 的产物 ⇒ 堆栈，`exit 2`（退出码语义仍成立，但信息不是友好文本） | 在 `elfGate` 开头加 `phoff+phnum*phentsize <= buf.length` 与 `shoff+shnum*shentsize <= buf.length` 校验，失败归入「不是可用的 ELF」；`statSync` 后判 `isFile()` |
-| **D-6** | 🟥 | **`--sign` 与重复投放不兼容（签名会被静默覆盖）**：幂等判据是「目标 sha == 源 sha」，而签名必然改变 sha ⇒ 下一次不带 `--sign` 的投放会把**已签名版覆盖回未签名版**（打印的是「+ 投放」，不是错误） | 实测：把签名版放进 `libs/`，再跑一次 `--out` ⇒ sha 回到 `3019bf5f…`（签名版为 `f3c3e070…`） | ① 在 `--sign` 的产物旁留标记（如 `libnode.so.signed.json` 记录签名 sha）并让幂等判定认识「已签名状态」；或 ② 至少在该场景打印**警告**；③ PROVENANCE §5（`:78-79`）已警示「`--check` 只认未签名原件」，应把这条提到 `--sign` 的 README/帮助文本里 |
+| **D-4** | 🟧 | **`--from <url>` 名义支持、实际按本地路径** | `provision.mjs`（历史） | ✅ **已修（A3/R2，2026-10-17）**：`--from` 命中 `http(s)://` 时走 `acquire()` 同一 fetch 路径（代理提示复用）；实测本地 HTTP 服务下载真产物 → 门禁全过 `exit 0` |
+| **D-5** | 🟥 | **畸形/截断 ELF 抛原始堆栈** | `provision.mjs`（历史：`elfGate` 无边界校验） | ✅ **已修（A4/R2，2026-10-17）**：校验段包 `try/catch` + `isFile()` 判定 ⇒ 一行 `✗` + `exit 2`（实测截断文件与目录均无堆栈）；`elf-inspect.py` 同步加了异常兜底（一行 `✗` + exit 2） |
+| **D-6** | 🟩 | **「`--sign` 与重复投放不兼容（签名会被覆盖）」——经复核不是缺陷** | `provision.mjs` 幂等判据是「目标 sha == 源 sha（lock 值）」 | ✅ **政策确认（2026-10-17，R2）**：契约要求**目标必须等于锁定的 SHA-256** ⇒ 把目标恢复成锁定原件是正确行为；仅按 A6 增加可见性：覆盖时打印**旧/新 SHA-256（短式）**一行（实测输出 `⟳ 覆盖 libnode.so：旧 … → 新 3019bf5f…`） |
 | **D-7** | 🟩 | **回退链只有一档**：`--download` 的「镜像失败 → 上游」代码在（`:241-245`），但 `mirror.kind=null` ⇒ `entry.mirror?.url` 为 `undefined`，实际只试 `source.url` | `provision.mjs:239` · 锁文件 `:30-33` | 建镜像后回归（§9 路线 B）；在那之前，spec 的 AS-6 只能算**设计判据** |
 | **D-8** | 🟧 | **本地目录存在但内容不对时不回退联网**：`--download` 只在「本地候选**不存在**」时才联网；若本地文件被篡改/换错，行为是**硬失败**（SHA 不符）而不是去下载 | `:236-238` | 属**有意的安全取向**（不要拿网络去掩盖本地既有文件），但要在 §G.3 写清「`--download` ≠ 自动修复」 |
 | **D-9** | 🟧 | **`--check` 不验 `libc++_shared.so` 可得性**：`findLibcxx()` 只在投放路径调用 ⇒ CI 的 `--check` 全绿仍可能在投放时因缺 SDK 而 `exit 2` | `:282`（提前 return）vs `:300-304` | 给 `--check` 加一个「`libc++_shared.so` 可定位性」探测（不算哈希），或在文档里明确 `--check` 的范围是「产物 + 锁」 |
-| **D-10** | 🟥 | **`elf-inspect.py` 的 FAIL 仍返回 0**，且其「六项」名不副实：verdict 只判 4 项（`e_type`/`e_machine`/`PT_INTERP`/`node::Start`）；`DT_NEEDED` 缺 `libc++`、`.codesign` 缺失、SHA-256 都**只打印不判** | `elf-inspect.py:4-10`（docstring 六项）vs `:155-165`（verdict 四项 + `return 0`） | 如果要把它当 CI 门禁：FAIL ⇒ `return 1`，并把 docstring 改成「4 项判定 + 3 项打印」；否则在 `tests/README.md` 里注明「仅供人工排障，退出码无判据」 |
+| **D-10** | 🟥 | **`elf-inspect.py` 的 FAIL 仍返回 0**，且其「六项」名不副实 | `elf-inspect.py`（历史：`:155-165` `return 0`） | ✅ **已修（A2/R2，2026-10-17）**：退出码 `0` = VERDICT PASS、`2` = VERDICT FAIL/非 ELF/32 位；docstring 已写清「4 项判定 + 3 项打印 + 退出码」；`smoke-host` 阶段② 解析 stdout 不受影响（实测 SMOKE: PASS） |
 | **D-11** | 🟨 | **清理只挂 `process.on('exit')`**：SIGINT/SIGTERM 不触发 ⇒ 强杀可能留下 `%TEMP%\libnode-sign-<pid>\`（~254 MB）。实测被 SIGTERM 杀掉时**无残留**，因为下载是「先缓冲后一次落盘」 | `provision.mjs:34-38` | 加 `process.on('SIGINT'|'SIGTERM')` 走同一清理函数；或把工作目录改成「进程退出即删」的 `fs.mkdtemp` 语义 |
 | **D-12** | 🟨 | **一批锁字段无任何工具读取**（只写文档，易漂移）：`schema` · `soname` · `nodeModuleVersion` · `embeds` · `flags` · `signed` · `verifiedOn/Device/Notes` · `openItems` · `libcxx.from/abi` · `localStore.layout` · **`gates.*`（七项全部）** | `grep -c` 结果：这些键在 `tools/*` 里 0 命中（`soname` 仅在 `elf-inspect.py` 被打印） | 明确它们是「审计/人读字段」并在本规格登记（已做）；若要防漂移，加一个 `--verify-lock` 子命令（用 `soname`/`nodeModuleVersion`/`gates` 交叉核对产物）——**当前不存在** |
 | **D-13** | 🟨 | **缓存目录 `PROVENANCE.md §3` 的数字是「加段后」的状态**：它写 `SHT 数量 29（e_shoff=126812160）`，而原始资产是 `e_shoff=126807472`、`e_shnum=28`（`126812160` 恰好是 `.codesign` 的页对齐落点）；`DT_NEEDED` 写成 `lib.so`（实际是 `libc.so`） | `PROVENANCE.md:45-47` vs 本轮 `elf-inspect.py` 原始产物输出 | 修 PROVENANCE（把「加段后」与「原件」两组数字分开写）——注意它不在本仓库内（父工程缓存目录） |

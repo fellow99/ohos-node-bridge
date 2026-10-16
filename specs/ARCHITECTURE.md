@@ -22,7 +22,7 @@
                 │ ArkTS API（@fellow99/node-bridge / 唯一出口 Index.ets）
 ┌───────────────┴────────────────────────────────────────────────────────────────┐
 │  libnode_bridge.so（本库 NAPI 引导件，随 HAP 编译；只链 NAPI + hilog）            │
-│   ├─ ArkTS 侧注册（nativeModule）：start / isRunning / version  ← 只有 3 个（S8） │
+│   ├─ ArkTS 侧注册（nativeModule）：start(6 参) / isRunning / version / lastError / stage  ← 5 个（S8） │
 │   ├─ 宿主能力桥：napi_threadsafe_function 队列（Node ⇄ ArkTS，JSON）  ⬜ Phase 2   │
 │   ├─ detached bootstrap 线程：dlopen → dlsym → node::Start(argc, argv)  ✅         │
 │   ├─ SIGSYS shim（io_uring_setup → 正好 -1）+ setenv(UV_USE_IO_URING=0)  ✅         │
@@ -118,7 +118,7 @@
 | ② | `libc++_shared.so` 必须**一起进 HAP** | `dlopen` 失败，ArkTS 侧**只拿到 `undefined`**（不报错） | ✅ `provision.mjs` 的 `findLibcxx()` + 投放分支 + 门禁④ + `runtime.lock.json.libcxx`；HAR 实测已含该 so |
 | ③ | `argc` **不能**把 `argv` 末尾 `nullptr` 哨兵算进去 | Node 拿到 `NULL` 参数，**5 ms 内段错误** | ✅ `bootstrap()`（`argc++` 只到 scriptPath，最后才写 `argv[argc] = NULL`） |
 | ④ | JS 载荷走 `rawfile` + `resourceManager`，且**谁写谁读** | 解包出的文件 `MODULE_NOT_FOUND`（`requireStack: []`） | ✅ 已落：ArkTS→沙箱落盘（`Env.materializeRawfile`）；`payload/bootstrap.js` 实现「只读直读 → 只读根 → 可写根」运行根决策、**Node 自解包（`zlib`+`fs`）**、就绪标记 `<payloadRoot>/.ready-<sha256 前 12 位>`（幂等命中即跳过）与解包统计（含 `skipped`） |
-| ⑤ | `--expose-internals` 必须出现在**启动参数**里 | `internal/modules/*` 全部 `MODULE_NOT_FOUND` | ⚠️ 机制已具备：`bootstrap()` 把 `flags` 切词进 argv；产物支持已验（`runtime.lock.json.flags.exposeInternals` + `provision.mjs` 附加探测）。**但默认 `flags` 只有 `--no-verify-heap`**（`NodeRuntime.ets:76` / `js_start()`），与规划 §5.3 默认值不一致 ⇒ 见 §⑤ 决策 D4 |
+| ⑤ | `--expose-internals` 必须出现在**启动参数**里 | `internal/modules/*` 全部 `MODULE_NOT_FOUND` | ✅ 机制具备：`bootstrap()` 把 `flags` 切词进 argv；产物支持已验（`runtime.lock.json.flags.exposeInternals` + `provision.mjs` 附加探测）。**定案（B5/R2）**：默认 `flags = '--no-verify-heap'`（`NodeRuntime.ets` / `js_start()` 双层兜底，真机验证值）；`--expose-internals` **仅在载荷走 internal-module stub 路线时**由消费方经 `flags`/`execArgv` 显式传入（规划 §5.3 草案默认值被取代；见 D4） |
 | ⑥ | 同进程内 `node::Start` **只能调用一次** | 第二次命中 `node.cc` 断言 `limit_called.exchange(true)` | ✅ 双侧保护：ArkTS `NodeRuntime.ets:62-69`（返回 `code=-1` + 当前状态）；C 侧 `g_dispatched` 守卫（`js_start()` 返回 `-1`）。⚠️ 仍缺「首次失败原因」的**结构化字段**（C5 缺口） |
 | **⑰** | **运行时端口必须随机（或先探测空闲）+ 宿主单实例** | 端口冲突 ⇒ 载荷 `EADDRINUSE` 未捕获异常 ⇒ **整个 App 进程 abort**（崩溃栈含 `libnode_bridge.so`） | ⚠️ 库侧无端口概念（不越界）；`payload/selfcheck.js` 默认端口 **15577**（文档化诊断契约）但**被占用时会回退到内核临时端口并打印 `[selfcheck] WARN 15577 被占用 → 改用 <port>`**（C3）；产品侧随机端口 + 单实例 ⬜ 消费方负责（其规划 §11/§13） |
 | **⑱** | **载荷必须自装 `uncaughtException`/`unhandledRejection` 兜底并写独立日志通道** | 进程内 Node **没有优雅退出路径**；且旧 `dup2` 方案会把宿主/Web 容器原生输出混进 `node.log` | ✅ 已落：`payload/bootstrap.js` 顶部注册 `process.on('uncaughtException'/'unhandledRejection')`，写 `<HOME>/payload/app.log` + stderr，**不 `process.exit`**；C 侧 reader 过滤组件原生输出并报丢弃计数（C1） |
@@ -136,7 +136,7 @@
 | **D1** | **进程内 `dlopen` + `node::Start`**（路线 A） | 唯一同时满足「无 Chromium」与「上架合规」的形态；两条核心链路都有一手真机证据 | ① Electron 只当 Node 宿主 —— 包内仍带 Chromium，合规口径不确定，且要维护两套运行时（登记为排期滑落时的**回退**）；② 子进程 + 看门狗 —— `801` 封死；③ Node→ArkTS 移植 —— 等于重写上游 | ✅ 已实现 |
 | **D2** | **bootstrap 走 detached pthread（32 MB 栈）** | UI 线程做 `dlopen`/`node::Start` 会 `APP_INPUT_BLOCK` | 在 ArkTS worker 里做 —— 拿不到 `dlopen` 语义与 C 栈控制 | ✅ 已实现 |
 | **D3** | **原生层启动失败必须可被 ArkTS 看见**：新增 `stage()`（`init\|stdio\|dlopen\|dlsym\|start\|running\|exited`）与 `lastError()` 两个只读探针 | 对 C2 的落地：stdio/`dlopen`/`dlsym`/`pthread_create` 失败、参数校验失败与重复投递都写 `set_error()`，ArkTS 侧可读 | 曾一度只有日志（必须读日志才能发现失败）⇒ 已按 C2 加探针；**ArkTS 侧已接入**：`getStage()`/`getLastError()` 公开读回、`waitUntilRunning()` 用 `stage==='exited'` 提前失败、`start()` 按 `-1`/`-2`/`>0` 分流文案 | ✅ 已实现（C 侧 + ArkTS 侧） |
-| **D4** | **默认 `flags = '--no-verify-heap'`（不含 `--expose-internals`）** | 实现取「最小可用」默认值 | 规划 §5.3 默认 `['--expose-internals','--no-verify-heap']`；硬约束 ⑤ 要求 `--expose-internals` **必须在启动参数里** | ⚠️ **规划/实现不一致**，Phase 1 需统一 |
+| **D4** | **默认 `flags = '--no-verify-heap'`（不含 `--expose-internals`）** | 实现取**真机验证过的**最小可用默认值 | 规划 §5.3 草案默认 `['--expose-internals','--no-verify-heap']` | ✅ **已定案（2026-10-17，B5/R2）**：记为**文档化偏差**（理由：真机验证值 + `--expose-internals` 只在 internal-module stub 路线必需，由消费方显式传入；库不静默追加，C4） |
 | **D5** | **`dlopen` 用 `RTLD_NOW \| RTLD_GLOBAL`** | SONAME 是 `libnode.so.137` 而 HAP 内名是 `libnode.so` ⇒ 任何以 `DT_NEEDED = libnode.so.137` 链接的 addon 运行期**找不到**；改依赖「符号进全局表」（R18 / O11） | 先例用 `RTLD_LOCAL`（因为它**没有任何 Addon**，我们没有这个自由） | ✅ 已实现（`bootstrap()` 的 `dlopen` 调用） |
 | **D6** | **引导件不链接 `libnode.so`**（只 `dlopen`） | 引导件与运行时版本解耦：换 Node 版本不需重编库（S7 / C7） | `target_link_libraries(... libnode.so)` —— 会把版本钉死，且 `dlopen` 的绝对路径问题依旧 | ✅ 已实现（`CMakeLists.txt:13-16`） |
 | **D7** | **C 侧接口保持极窄**（初版 3 个；Phase 1 扩到 **5 个**：`start`/`isRunning`/`version`/`lastError`/`stage`，`.d.ts` 同步更新，且 `start()` 新增第 6 参 `envPairs`） | API 面越小越稳（R15）；扩展必须**同时**改 `.d.ts`（S8 的执行口径） | 把 logs/hostBridge/shutdown 全下沉到 C —— 会把线程安全、超时、队列全部塞进 C 层，成本高且难测 | ✅ 已实现（`Init()` 注册 5 个；`index.d.ts` 已同步）；S8 字面「只有 3 个」需按「扩展须同步 `.d.ts`」重述 |
@@ -176,7 +176,7 @@
 |---|---|---|---|
 | ① | **端到端证书**：端上 HTTP 自检端点 | `hdc fport tcp:15577 tcp:15577 && curl -s http://127.0.0.1:15577/facts` → `{at, checks{...}}`（16 项冻结键） | ✅ `payload/selfcheck.js` |
 | ② | **日志读回**：文件日志 + `/log` 端点 | `curl -s http://127.0.0.1:15577/log`（尾 8 KB，组件原生输出已被过滤）· ArkTS `Logger.tail(path, maxBytes)` | ✅ `payload/selfcheck.js` / `Logger.ets` |
-| ③ | **hilog** | `hdc shell hilog -x \| grep NODE_BRIDGE`（DOMAIN `0xD0033` / TAG `NODE_BRIDGE`；C 侧 `0xD003300`） | ✅ `Logger.ets` / `write_line()` |
+| ③ | **hilog** | `hdc shell hilog -x \| grep NODE_BRIDGE`（DOMAIN `0xD0033` / TAG `NODE_BRIDGE`；**C 侧与 ArkTS 侧同为 `0xD0033`**，A1/R2） | ✅ `Logger.ets` / `write_line()` |
 | ④ | **崩溃取证** | 日志内 `CRASH sig=… si_addr=… pc=… lr=… sp=… r0=… stage=…` **＋** `<home>/node-bridge/last-crash.json`（`{at,stage,signal,hint}`）；ArkTS 侧 `lastCrash()` ✅（JSON 损坏时从日志尾 `CRASH` 行降级重建） | ✅ C 侧 `crash_handler()` + ArkTS 侧读回 |
 | ⑤ | **诊断聚合**：`GET /diag` | `curl -s http://127.0.0.1:15577/diag` → `{at, lastError, appLogTail, hostBridge}` | ✅ `payload/selfcheck.js` |
 | ⑥ | **反向回传**：`POST /rport` | `curl -X POST --data-binary @file http://127.0.0.1:15577/rport` → 转发到 `127.0.0.1:${RPORT_PORT}`（缺省 19999） | ✅ `payload/selfcheck.js` |

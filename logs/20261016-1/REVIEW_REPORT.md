@@ -78,3 +78,92 @@
 
 > 处置纪律（`receiving-code-review`）：**逐条核验后才动手**；正确的不致谢、直接给出改动位置；
 > 不确定的先问或明确标注；与既有架构决策冲突的（C2 的 `PI_*` 解释权）以宪法优先并**修订契约**而不是绕过。
+
+---
+
+## R2（迟到报告整合）· 2026-10-17
+
+> 背景：002/005/006/001 等规格代理的最终报告写于**后续实现与 code-review-fix 轮之前**；本轮逐条复核后，
+> 已修的不重复动、仍开着的按「精确清单」修复，并回写规格。R1 内容保持原样。
+
+### 1. 复核后确认「早已修复」的条目（不重复处置）
+
+stdio 管道 + reader 线程排空 · 日志行格式 `<stream> <epochMs> <text>` · ArkWeb/Chromium 行过滤 ·
+崩溃行单次 `write` · `stage()` 提升到 `running` · `envPairs` 截断告警 · `g_last_error` 清空时序 ·
+失败早退 `set_stage("exited")` · `get_str_arg` 需要长度查询 · `.d.ts` 记录 `-2` · `io_uring` 标签文案 ·
+`pi-desktop-ark` 的 `compressNativeLibs`/`extractNativeLibs`、`launchType: singleton`、载荷缺陷修复、
+`probeFlags` debug 门控。
+
+### 2. 本轮新修（A1–A6）
+
+| # | 缺陷 | 处置 | 位置 |
+|---|---|---|---|
+| A1 | hilog domain 两侧不一致（C `0xD003300` vs ArkTS `0xD0033`） | **C 侧改为 `0xD0033`**；两文件加「必须相同」注释；构建产物反汇编佐证 `mov w2,#0x33; movk w2,#0xd,lsl #16`（= 0x000D0033）后再 `bl OH_LOG_Print` | `library/src/main/cpp/node_bridge.c:46`、`library/src/main/ets/log/Logger.ets:9` |
+| A2 | `elf-inspect.py` 的 `VERDICT: FAIL` 仍 `return 0`（CI 假绿） | 改为 `return 0 if not verdict else 2`；docstring 写明退出码；stdout 文本不变（`smoke-host` 阶段② 解析不受影响） | `tools/elf-inspect.py:14,170` |
+| A3 | `--from <url>` 名义支持、实际按本地路径（`ENOENT` 栈） | `--from` 命中 `http(s)://` 时走与 `--download` 同一 `acquire()` fetch 路径；代理提示抽成 `proxyHint()` 复用（不新增依赖） | `tools/provision.mjs:52,245-256` |
+| A4 | 截断/畸形 ELF 抛 `RangeError`；`--from` 给目录抛 `EISDIR` | 读/解析包 `try/catch` + `isFile()` 判定 ⇒ 一行 `✗` + `exit 2`；`elf-inspect.py` 同步加异常兜底（一行 `✗` + `exit 2`） | `tools/provision.mjs:283-295`、`tools/elf-inspect.py:176-180` |
+| A5 | `Env.materializeRawfile` 忽略视图 `byteOffset`/`byteLength` | 只写视图覆盖的字节（offset=0 且等长时零拷贝，否则 `slice` 精确副本）；签名与行为不变，ArkTS 严格模式保持 | `library/src/main/ets/util/Env.ets:83-92` |
+| A6 | 覆盖非锁定目标静默 | 覆盖时打印旧/新 SHA-256（短式）一行（`libnode.so` 与 `libc++_shared.so` 各一行）；**不**改成拒绝（目标必须等于 lock 值是文档化契约） | `tools/provision.mjs:315-324,336-343` |
+
+### 3. 规格回写（B1–B7）
+
+| # | 修复 |
+|---|---|
+| B1 | 宪法 S8 改为「C 侧 = 5 符号、`start` 6 参、扩展需同步 `.d.ts` + 契约 §1.1」，行号引用改为符号级锚点（`Init()` 的 `napi_property_descriptor desc[]`）；**全库规格内所有「3 个符号/`0xD003300`」表述一并订正**（ARCHITECTURE / TECH / 001 / 002 / 003 / 004 / 005 / 006 / 007 / overall-*） |
+| B2 | S5 全部改 ✅ 并写明新机制（手写 `u64_to_dec`/`u64_to_hex` + `lb_append*` + 单次 `write`，handler 区间 0 命中 stdio/malloc/getenv）：constitution、002 spec/plan、006 spec/plan、overall-plan/overall-spec/overall-test-cases（TC-002-007）、001/007 plan |
+| B3 | 6 态口径落地：001 spec（FR-001-004/006/007/009/046）、001 plan §3.1/§4.1/§6.1/§7.2/§9（第 1/15 条）、overall-test-cases TC-001-009、overall-data-model §3.1/§3.3；「不在进程内重启」的理由保留；TC-001-009 状态口径冲突消解（脚本侧钩子仍标 Phase 2） |
+| B4 | `pi-desktop-ark` HAP 压缩：`overall-data-model.md` §6.1/§6.2（含产生命令与原始输出）、`overall-test-cases.md` TC-ARK-007/B7/B9、`SPECS_CHECKLIST.md`、107 spec/plan、ARCHITECTURE。实测：签名 HAP **46,031,244 B**、三个 `.so` 全 `compress_type=8`；`rawfile/resfile` 仍为 `0`，规划附录 A 的「全部为 8」按实测收敛为「原生库为 8」 |
+| B5 | `--expose-internals` 统一记为**文档化偏差**（默认 `--no-verify-heap` 为真机验证值；`--expose-internals` 仅在 internal-module stub 路线必需、由消费方经 `flags`/`execArgv` 显式传入）：001 plan §3.5/§9-8、002 spec/plan、ARCHITECTURE D4、TECH #4、overall-plan #5、overall-test-cases TC-001-010 |
+| B6 | 沙箱路径以实现为准并标注规划草案被取代：payload 根 `<filesDir>/payload`、日志 `<filesDir>/payload/node.log`、崩溃记录 `<filesDir>/node-bridge/last-crash.json`（overall-data-model、001 plan §9-2、004 plan/spec、006 plan/spec；不改 `docs/000-工程规划.md`） |
+| B7 | 就绪 marker 统一为 `.ready-<sha256 前 12 位>`（004 plan §3.3/§4.4）；`/facts` 16 个冻结键（含 `spawn`）+ 四条端点 `/facts` `/log` `/rport` `/diag`；`bootstrap.js` 已无 `PI_WEB_ENTRY`（002/001/overall 各处的 ⚠️ 一并转 ✅） |
+
+### 4. 明确**反驳/不处置**的一条
+
+- **「`--sign` 会静默覆盖已签名目标」不是缺陷**：工具契约是「部署目标必须等于锁定的 SHA-256」⇒ 把目标恢复成
+  锁定原件是**正确行为**，不引入拒绝分支；只按 A6 补充旧/新 SHA-256 可见行（005 plan D-6 已改为 🟩 政策确认）。
+
+### 5. 本轮验证输出（原文摘录）
+
+```text
+$ node tools/smoke-host.mjs
+[1/4] lock + runtime gate ............... PASS
+[2/4] ELF inspect ....................... PASS
+[3/4] payload unit tests ................ PASS
+[4/4] contract drift .................... PASS
+SMOKE: PASS        （exit 0）
+
+$ python tools/elf-inspect.py ../pi-desktop-ark/entry/libs/arm64-v8a/libnode.so
+VERDICT         : PASS (可 dlopen 的真共享库)          exit 0
+
+$ python tools/elf-inspect.py <合成 PIE：PT_GNU_RELRO→PT_INTERP 等长改写>
+VERDICT         : FAIL -> PT_INTERP present (PIE!)      exit 2
+
+$ node tools/provision.mjs --from <截断 100 B 的 ELF> --check
+✗ 无法读取/解析 ELF：…\libnode-trunc.so —— The value of "offset" is out of range. It must be >= 0 and <= 96. Received 120
+exit 2（无 RangeError 栈）
+
+$ node tools/provision.mjs --from <目录> --check
+✗ 无法读取/解析 ELF：…\scratch\b1548005-… —— 不是普通文件（目录？）      exit 2
+
+$ node tools/provision.mjs --from http://127.0.0.1:18777/libnode-arm64.so --check
+  下载：http://127.0.0.1:18777/libnode-arm64.so
+  实测 SHA-256 = 3019bf5f9a279d98a87606fc13c53b0e797b6a50cf174f8a1243d880c71151a1
+  ⑦ 项门禁全 OK（② PT_INTERP 计数 == 0）
+✓ --check：门禁全过（未投放）      exit 0
+
+$ python tools/elf-inspect.py <截断> / <目录>            → 一行 ✗ …（unpack requires a buffer of 56 bytes / Permission denied）exit 2
+$ node tools/provision.mjs --from <合成 PIE> --check     → 门禁 ② FAIL（实测 1）→ ✗ 产物与 lock 不符 …  exit 2
+$ node tools/provision.mjs --from <真产物> --out <预置改动目标>
+  ⟳ 覆盖 libnode.so：旧 SHA-256 f81f36f58f6e319f… → 新 3019bf5f9a279d98…
+  ⟳ 覆盖 libc++_shared.so：旧 SHA-256 eb22cc97535218c3… → 新 388e0df23d7bfddc…
+
+$ hvigorw --mode module -p module=library@default assembleHar --no-daemon
+> hvigor BUILD SUCCESSFUL in 10 s 901 ms        （exit 0；`ArkTS:ERROR` = 0 行）
+
+$ llvm-objdump -d <构建产物> | grep -B2 OH_LOG_Print
+      4468: mov  w2, #51
+      446c: movk w2, #13, lsl #16        ; w2 = 0x000D0033 = 0xD0033
+      4478: bl   OH_LOG_Print@plt
+```
+
+B4 实测命令与原始输出见 `pi-desktop-ark/specs/overall-data-model.md` §6.2（HAP 46,031,244 B；三个 `.so` `compress_type=8`；`rawfile/resfile` 仍 `0`）。

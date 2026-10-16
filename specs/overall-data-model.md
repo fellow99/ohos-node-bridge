@@ -118,22 +118,22 @@
 
 | 规划（§5.3） | 实现（✅） | 处置 |
 |---|---|---|
-| `NodeRuntimeState`（联合类型，6 值） | `NodeState`（enum，4 值） | Phase 1 决定：沿用实现名（`NodeState`）或改规划；**取值必须补齐 `stopping/stopped`** |
+| `NodeRuntimeState`（联合类型，6 值） | `NodeState`（enum，**6 值**：`idle`/`starting`/`running`/`failed`/`stopping`/`stopped`） | ✅ 已对齐（B3/R2）：沿用实现名 `NodeState`，取值已补齐（`Types.ets:17-24`） |
 | `NodeRuntime.instance`（静态只读） | `NodeRuntime.getInstance()` | 保留实现形态（ArkTS 静态 getter 限制）；`Index.ets` 已导出 |
 | `runtime.state`（只读属性） | `getState(): NodeState` | 同上 |
-| `runtime.pid` | 无 | Phase 1 补（应等于宿主进程 pid） |
+| `runtime.pid` | `getPid(): number` | ✅ 已实现（`NodeRuntime.ets`；`process.pid` 不可用时返回 `-1` 并 `warn`，契约 §2.6） |
 | `start(opts): Promise<void>` | `start(context, options): NodeStartResult` | 实现形态更符合「投递语义」；规划需同步 |
 | `NodeRuntimeOptions.entry` | `scriptPath`（绝对路径） | 语义接近但缺「相对 `payloadRoot`」的解析能力 |
-| `NodeRuntimeOptions.execArgv: string[]` | `flags: string`（空格分隔） | ⚠️ 两种载体必须只留一种（切词无法表达含空格的参数） |
-| `NodeRuntimeOptions.payloadRoot` 默认 `<filesDir>/node-bridge/payload` | `Env.payloadDir` = `<filesDir>/payload`（**无 `node-bridge` 段**） | ⚠️ **路径不一致**；两处约定必须统一，否则日志与载荷分家 |
-| `runtime.host: NodeHostBridge` | 无（`HostBridge` 类已导出、`dispatch` 可用） | Phase 1/2 挂载 |
+| `NodeRuntimeOptions.execArgv: string[]` | `flags: string`（空格分隔）**与** `execArgv: string[]` | ✅ 两者都支持：`execArgv` 给了就覆盖 `flags`（`flags = execArgv.join(' ')`）；契约 §2.3 |
+| `NodeRuntimeOptions.payloadRoot` 默认 `<filesDir>/payload` | `Env.payloadDir` = `<filesDir>/payload` | ✅ 已对齐（B6/R2）：实现值 = `<filesDir>/payload`；日志 `<filesDir>/payload/node.log`、崩溃记录 `<filesDir>/node-bridge/last-crash.json`；规划草案的 `<filesDir>/node-bridge/payload` 被取代 |
+| `runtime.host: HostBridge` | ✅ 已实现 `get host(): HostBridge`（`NodeRuntime.ets`） | ✅ B3/R2 复核 |
 | Node 侧 `require('@fellow99/node-bridge/host')` | 无 | Phase 2（桥的 Node 半） |
 
 ---
 
 ## ③ 运行时状态机
 
-### 3.1 状态定义（✅ 实现的 4 态）
+### 3.1 状态定义（✅ 实现的 6 态）
 
 | 状态 | 字符串值 | 含义 | 可终止？ |
 |---|---|---|---|
@@ -141,6 +141,8 @@
 | `STARTING` | `starting` | 已投递到原生层，运行时装填中；**不代表已就绪** | 否 |
 | `RUNNING` | `running` | 由**消费方**在探活成功后 `markRunning()` 认定 | 否 |
 | `FAILED` | `failed` | **终态**：投递失败 / 探活失败 / 崩溃 | 是（终态） |
+| `STOPPING` | `stopping` | `shutdown()` 标记：已记录关停请求（**进程内 Node 无法优雅停止**，不做实际关停） | 否（仅标记） |
+| `STOPPED` | `stopped` | 终态枚举值（Node 结束后的停止标记） | 是（终态） |
 
 ### 3.2 迁移表（✅ 逐条对应代码）
 
@@ -161,7 +163,7 @@
 | `RUNNING → IDLE` / `STARTING → IDLE` | 无「停止」语义：真正的停止只能是进程退出 | 规划 §5.2 |
 | `IDLE → *`（任意非 `start` 的迁移） | `markFailed` 在 `IDLE` 下**静默返回**（守卫 `state !== IDLE`）⇒ 未启动就报失败不会改状态、也不写日志 | ⚠️ `NodeRuntime.ets:110`（**静默 no-op**，与 C2 有张力：行为不可见） |
 | 二次 `start()` 改变状态 | 守卫：非 `IDLE` 直接返回 `{ok:false,code:-1,state:<当前>,message}`，**不保留**首次失败原因字段 | ⚠️ `NodeRuntime.ets:62-69`（C5 缺口：原因只在首次调用的返回值与日志里） |
-| `stopping` / `stopped` 迁移 | 这两个状态**尚不存在**（⬜ 规划未实现 Phase 1） | 规划 §5.2/§5.3 |
+| `stopping` / `stopped` 迁移 | 六态枚举已实现：`shutdown()` 标记 `stopping`（**不假装能停**）；`stopped` 为终态值 | 规划 §5.2/§5.3 · `Types.ets:17-24` | ✅ 2026-10-17 |
 | 运行期改变启动参数后重启到新参数 | `execArgv` 启动即固定，库不提供 push | C4 / 硬约束 ⑤ |
 
 ### 3.4 与原生层的状态对应（⚠️ 两套状态不同步）
@@ -221,11 +223,11 @@
 | 实体 | 路径（相对应用沙箱） | 谁创建 | 谁读 | 现状 |
 |---|---|---|---|---|
 | 载荷目录（实现口径） | `<filesDir>/payload/` | `Env.ensureDir`（ArkTS，`Env.ets:39-42`）；原生层另建 `<home>/tmp` 与 `<home>/node-bridge/` | Node / ArkTS | ✅ 已实现 |
-| 载荷根（规划口径） | `<filesDir>/node-bridge/payload` | 规划 | — | ⚠️ **与实现不一致**（实现无 `node-bridge` 段），必须二选一 |
+| 载荷根（规划**草案**口径） | `<filesDir>/node-bridge/payload` | 规划 | — | ❌ **已被实现取代**（B6/R2）：实现值 = `<filesDir>/payload`；`docs/000-工程规划.md` 保留历史措辞 |
 | 临时目录 | `<filesDir>/tmp/` | `Env.ensureRuntimeDirs` ✅ + 原生 `mkdir(tmp, 0755)` ✅ | Node（`TMPDIR`/`TMP`/`TEMP`） | ✅ |
 | 日志文件 | `<filesDir>/payload/node.log`（常开 fd，单次 `write()` 整行追加，`0644`） | 原生 `open_log_fd()` + 独立 reader 线程（stdio pipe 排空） | ArkTS `Logger.tail`、自检 `/log`（读尾 8192 字符） | ✅ 已实现；**行格式 `<stream> <epochMs> <text>`**（`stream ∈ out\|err\|sys`）—— 改格式必须同时改 ArkTS 解析 |
-| 崩溃记录 | `<HOME>/node-bridge/last-crash.json`（`HOME` 默认 = `context.filesDir`） | ✅ **原生 `crash_handler()` 已写**（`O_TRUNC` 覆盖，内容 `{at,stage,signal,hint}`） | ArkTS `lastCrash()` ⬜ 未实现 | ⚠️ **写的一半已落地，读的一半缺失**（Phase 1） |
-| 幂等 marker | `<payloadRoot>/<archiveSha256 前 12 位>`（另可辅以摘要 marker 文件） | `bootstrap.js`（规划） | 同上（命中即跳过解包） | ⬜ 规划未实现（Phase 1） |
+| 崩溃记录 | `<HOME>/node-bridge/last-crash.json`（`HOME` 默认 = `context.filesDir`） | ✅ **原生 `crash_handler()` 已写**（`O_TRUNC` 覆盖，内容 `{at,stage,signal,hint}`） | ✅ ArkTS `lastCrash()` 已实现（含 JSON 损坏时从日志尾降级重建） | ✅ **两侧齐备**（2026-10-17） |
+| 幂等 marker | `<payloadRoot>/.ready-<sha256 前 12 位>`（JSON：完整 `sha256` + `files` + `bytes` + `skipped` + `at`） | `payload/bootstrap.js`（已实现） | 同上（命中即跳过解包） | ✅ 已实现（B7/R2：**不是** `<archive 基名>.sha256`） |
 | 宿主载荷（只读） | `resources/resfile/<app>/`（安装目录，只读直读） | 消费方构建期 | Node | ⬜ 库侧引导逻辑未实现 |
 | 运行时与引导件 | HAP `libs/arm64-v8a/`（真机实际落 `/data/storage/el1/bundle/libs/arm64/`） | 构建 + 投放 | 动态链接器（`dlopen` 裸名） | ✅ |
 | 归档中转（可选） | 归档由 `rawfile`/`resfile` 提供（只读）⇒ 解包目标必须落**可写沙箱** | — | — | ⬜ |

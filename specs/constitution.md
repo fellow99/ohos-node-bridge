@@ -100,10 +100,10 @@
 | S2 | **barrel 唯一出口**：对外只暴露 `Index.ets` 导出的符号；新增公共 API 必须同时改 `Index.ets` 与 `runtime/Types.ets` | `library/Index.ets` |
 | S3 | **类型改动即破坏性变更**：`Types.ets` 是对外契约，注释里必须写明 | `library/src/main/ets/runtime/Types.ets` 文件头 |
 | S4 | **路径一律绝对**：不依赖 `process.cwd()`（真机 = `/`）、不依赖 `process.execPath`（真机 = `/system/bin/appspawn`） | `library/src/main/ets/util/Env.ets`、规划 §D.8 偏差表 |
-| S5 | **信号上下文禁用 stdio**：`SIGSYS` / 崩溃 handler 内**只允许**裸 `open`/`write`/`close`，**禁止** `printf`/`vsnprintf`/`OH_LOG_Print` | `library/src/main/cpp/node_bridge.c` `raw_write` 注释 |
+| S5 | **信号上下文禁用 stdio**：`SIGSYS` / 崩溃 handler 内**只允许**裸 `open`/`write`/`close`，**禁止** `printf`/`vsnprintf`/`OH_LOG_Print` | ✅ `library/src/main/cpp/node_bridge.c`：`raw_write_fd()` 只用裸 `write`；`crash_handler()` 手写 `u64_to_dec`/`u64_to_hex` + `lb_append*` 拼栈缓冲 + **单次 `write()`**（0 命中 stdio/malloc/getenv；`sig_name`/`stage_hint` 只剩纯比较） |
 | S6 | **native 产物落点固定**：CMake 必须显式设 `CMAKE_LIBRARY_OUTPUT_DIRECTORY` → `<module>/libs/${OHOS_ARCH}`，否则 HAP 里没有 `libs/`（不报错但功能不通） | `library/src/main/cpp/CMakeLists.txt:11-12` |
 | S7 | **引导件不链接 libnode**：`dlopen` 在运行期完成，引导件与运行时版本解耦 | `library/src/main/cpp/CMakeLists.txt:16-18` |
-| S8 | **C 侧接口只有 3 个**：`start` / `isRunning` / `version`；扩展 NAPI 面必须同时更新 `.d.ts` | `library/src/main/cpp/node_bridge.c:285-293` |
+| S8 | **C 侧接口 = 5 个符号**：`start` / `isRunning` / `version` / `lastError` / `stage`，且 `start` **6 参**（`libDir`, `scriptPath`, `flags`, `home`, `logPath`, `envPairs`）；扩展或改动必须**同时**更新 `library/src/main/cpp/types/libnode_bridge/index.d.ts` 与 `logs/20261016-1/IMPLEMENTATION_CONTRACT.md` §1.1 | `library/src/main/cpp/node_bridge.c` `Init()` 的 `napi_property_descriptor desc[]`（`node::Start` 的 argv 装配见 `js_start`） |
 | S9 | **日志双通道**：关键信息同时进 hilog 与日志文件；文件读取失败返回占位串而**不抛异常** | `library/src/main/ets/log/Logger.ets` |
 | S10 | **二进制不入库**：`libnode.so`（120.9 MiB）由 `tools/provision.mjs` 投放；HAR 不含它（`.ohpmignore`） | `library/.ohpmignore` · `runtime.lock.json` · 附录 G.1 |
 

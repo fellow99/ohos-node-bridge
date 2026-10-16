@@ -97,9 +97,9 @@
 | # | 项 | 现状 | 处置建议 |
 |---|---|---|---|
 | 1 | 工程 `targetSdkVersion = 6.1.1(24)`，真机基线是 **API 26** | ⚠️ 文档口径常写「API 26」，工程配置是 API 24 / minAPI 17 | 明确两者不冲突（设备 API ≥ 工程 target 是允许的），但**规格文档必须写工程值 + 基线设备值两个数**，不要混用 |
-| 2 | `module.json5` **未写** `compressNativeLibs` / `extractNativeLibs` | ⬜ 规划 §5.9 要求写在 module 级；当前 `module.json5` 只有 deviceTypes 与 2 条开放权限（✅实测 grep 0 命中） | Phase 1 补上并在真机上按「查 HAP `compress_type==8`」口径复核；这是 **≈44 MB 体积预算成立的前提** |
+| 2 | `module.json5` 的 `compressNativeLibs` / `extractNativeLibs` | ✅ **已落地（2026-10-17，B4/R2）**：消费方 `pi-desktop-ark/entry/src/main/module.json5` 在 module 级声明两者（库自身 HAR 不产 HAP，不声明）；实测签名 HAP **46,031,244 B**、三个 `.so` 全部 `compress_type=8`（此前 129,535,202 B / 全 0） | 保持：换消费方模块时须复查 HAP `compress_type==8` |
 | 3 | 库声明 ACL 的方式与规划 §9.4 不同 | ⚠️ 规划写「库在 `module.json5` 里与 `requestPermissions`/`definePermissions` **成对声明**」；实现只声明 2 条开放权限，并把 ACL 明确留给消费方 | **以实现为准**（更符合 C1 与「按自己包名申请」）；需把规划 §9.4 的措辞与 `module.json5:13-15` 的注释对齐，否则后续评审会当成缺项 |
-| 4 | 默认 `flags` 与规划不一致 | ⚠️ 规划 §5.3 默认 `['--expose-internals','--no-verify-heap']`；实现默认仅 `--no-verify-heap`（`NodeRuntime.ets:76`、`js_start()` 的空值兜底） | Phase 1 统一；`--expose-internals` 是硬约束 ⑤（缺它 `internal/modules/*` 全 `MODULE_NOT_FOUND`） |
+| 4 | 默认 `flags` 与规划草案不一致 | ✅ **已定案（2026-10-17，B5/R2，文档化偏差）**：实现默认 `flags = '--no-verify-heap'`（真机验证值、最小可用集；`NodeRuntime.ets`、`js_start()` 空值兜底）；`--expose-internals` **仅在载荷走 internal-module stub 路线时必需**，由消费方经 `flags`/`execArgv` 显式传入（库不静默追加，C4） | 保持；规划 §5.3 草案默认值已被取代 |
 | 5 | `--inspect` 调试通道（B12/P0-9） | ⬜ 未实现；`flags` 可手工传入但不区分 buildMode | release 必须**强制**关闭（旧壳 R7：默认开启等于把宿主交出去）；建议在库侧按 `BuildProfile` 判定并拒绝 |
 | 6 | 第三方许可清单（G4） | ⚠️ 交付物缺口：`LICENSE` 只有本库 MIT；Node/V8/OpenSSL 清单未随包 | Phase 2/3 交付物；可基于锁文件生成（`source.license` 已存在） |
 | 7 | 供应链 | ⚠️ R8：来源现成（`electerm/ohos-node-shared`），无法复现的黑盒二进制进上架包 | 已登记：SHA-256 锁定 + `verifiedOn/verifiedDevice` + 配方归档（附录 D）；Phase 3 自建替换（§G.6 路线 C） |

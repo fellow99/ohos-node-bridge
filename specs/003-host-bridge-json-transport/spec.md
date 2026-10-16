@@ -207,6 +207,6 @@
 |---|---|---|---|
 | 上游 | `001-runtime-core` | 生命周期状态（`idle/starting/running/failed`）——桥的可用性/失败语义要与之对齐；`NodeRuntime` 需暴露桥实例（现缺） | `NodeRuntime.ets:19-35`；🔶 §5.3（`readonly host`） |
 | 上游 | `006-observability` | `Logger.info/warn/error` 双通道日志；诊断读取通道 | `Logger.ets:14-24`；S9 |
-| 上游 | `002-napi-bootstrap` | N-API 导出面（现只有 3 个接口）——线程安全传输层必须扩展它并**同步 `.d.ts`** | S8；`node_bridge.c:285-293`；`cpp/types/libnode_bridge/index.d.ts:15` |
+| 上游 | `002-napi-bootstrap` | N-API 导出面（现 **5 个**：`start` 6 参 / `isRunning` / `version` / `lastError` / `stage`，2026-10-17）——线程安全传输层必须继续扩展它并**同步 `.d.ts`** | S8；`node_bridge.c` `Init()`；`cpp/types/libnode_bridge/index.d.ts` |
 | 下游 | 消费方的能力实现 | `perm.*` / `fs.pick*` / `shell.*` / `notify.*` 的具体处理器；能力 schema 共同签收 | §6.1 |
 | 下游 | `004-payload-bootstrap` / 自检载荷 | `/facts` 增桥字段，供 AS-003 / FR-003-024 验收 | §5.7；`payload/selfcheck.js:60-63` |

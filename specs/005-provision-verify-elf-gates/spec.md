@@ -96,7 +96,7 @@
 | **FR-005-026** | **自签仅服务独立分发**：`--sign` 补 `.codesign` + 自签 + **当场验签**；**HAP 内原生库不需要 `.codesign`**（真机已实测关闭 R22） | `provision.mjs:315-335`；`tools/ohos-selfsign.mjs`；§D.5/§D.6/§D.9 · G5 | ✅ 实测（端到端 3.2 s，`VERIFY: PASS` 十项） |
 | **FR-005-027** | **自签离线自足**：纯 SHA-256 Merkle + fs-verity descriptor，**无私钥、无证书、不依赖 SDK 的 `binary-sign-tool`**；缺 `.codesign` 段时由本工具自实现 `add-section`（页对齐 4096 B、重建段表、**原字节一字不动**） | `ohos-selfsign.mjs:92-146,213-261`；§D.4/§D.5 | ✅ 实测（`.codesign @ 126812160` 页对齐；`selftest: IDENTICAL`） |
 | **FR-005-028** | **Verifier 必须是内容校验**：`verify` 不只查「有没有 `.codesign`」，而要校验 Merkle 根与签名摘要 | `ohos-selfsign.mjs:161-188`（十项） | ✅ 实测（R21 的处置：口径不一 ⇒ 校验内容） |
-| **FR-005-029** | **零依赖只读检查器**：`tools/elf-inspect.py` 用纯 Python 自解析 ELF，回答「形态能不能 `dlopen`」并打印 SHA-256 / SONAME / 段表解析完整度 | `elf-inspect.py`（169 行，仅 `hashlib`/`struct`/`sys`） | ⚠️ 实现为**四项判定 + 打印项**，docstring 声称六项；且 `VERDICT: FAIL` 仍 `exit 0`（见 plan §6.3-⑪ / §10） |
+| **FR-005-029** | **零依赖只读检查器**：`tools/elf-inspect.py` 用纯 Python 自解析 ELF，回答「形态能不能 `dlopen`」并打印 SHA-256 / SONAME / 段表解析完整度 | `elf-inspect.py`（仅 `hashlib`/`struct`/`sys`） | ✅ 实现为**四项判定 + 打印项**，docstring 已改为「4 项判定 + 3 项打印 + 退出码 0/2」；`VERDICT: FAIL` 现返回 **2**（A2/R2，2026-10-17） |
 | **FR-005-030** | **供应链记录**：每个运行时条目必须带来源（仓库 / tag / 资产 / URL）、许可、构建方式、以及「验过没有」（`verifiedOn` / `verifiedDevice` / `verifiedNotes`） | 锁文件 `runtimes[].source` / `verified*`（C7 供应链纪律 · §5.8 表「供应链纪律」） | ✅ 已写入（2026-10-16 / HAD-W32 / 含 SIGTRAP 前置说明） |
 
 ---
@@ -147,10 +147,10 @@
 | NFR-2 | **可进 CI** | `--check` 0/2 语义；不交互、不写盘、无网络（本地缓存存在时） | ✅ |
 | NFR-3 | **零额外依赖** | host 侧只用 Node 内置模块（`crypto`/`fs`/`path`/`child_process`/`url`/`os`）+ 纯 Python 3 标准库；不装 llvm、不装 pip 包、不装 Java | ✅（plan §1.2） |
 | NFR-4 | **体积与网络可控** | 默认离线；联网是显式 `--download`；中转文件退出即清；下载全量缓冲在内存（峰值 ≥120 MB，见 plan §6.4） | ⚠️ 网络实测受限 |
-| NFR-5 | **退出码语义** | `0` = 校验/投放成功；`2` = 硬失败（含未捕获异常）；自签工具另用 `1`（验签失败）/`2`（用法）/`3`（异常） | ✅ 实测 |
+| NFR-5 | **退出码语义** | `0` = 校验/投放成功；`2` = 硬失败（含未捕获异常）；`elf-inspect.py`：`0` = VERDICT PASS、`2` = VERDICT FAIL/非 ELF/32 位（A2/R2）；自签工具另用 `1`（验签失败）/`2`（用法）/`3`（异常） | ✅ 实测 |
 | NFR-6 | **文本契约稳定** | 门禁表七行固定格式、`--list` 单行格式（plan §5.1）；`--quiet` 只静默**进度**，**不静默失败**（失败仍走 stderr） | ✅ 实测（`--quiet` 下失败文本仍输出） |
 | NFR-7 | **性能量级**（本机实测基线） | `--check` 0.69 s；首投 0.68 s；幂等重投 0.86 s；含 `--sign` 全链 3.2 s | ✅ |
-| NFR-8 | **不隐藏平台真相**（C2） | 缺产物时给三条出路；缺 `libc++_shared.so` 时说明「`dlopen` 会静默失败」；代理未开时打印正确命令；`elf-inspect.py` 的 FAIL 退出码 ⚠️ 例外（plan §10） | ✅ / ⚠️ |
+| NFR-8 | **不隐藏平台真相**（C2） | 缺产物时给三条出路；缺 `libc++_shared.so` 时说明「`dlopen` 会静默失败」；代理未开时打印正确命令；`--from <url>` 与 `--download` 走同一 fetch 路径并给出代理提示；`elf-inspect.py` 的 FAIL 已返回 2（A2/R2） | ✅ |
 
 ---
 

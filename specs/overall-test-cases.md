@@ -55,11 +55,11 @@
 | TC-001-003 | 启动不阻塞 UI | L4 | 001/002 | 启动期间**无** `APP_INPUT_BLOCK`/ANR；界面仍可交互（前后 `dumpLayout` 有差异） | `hdc shell hilog` + `uitest dumpLayout` 前后对比 | ✅（探针口径；库侧待复跑） |
 | TC-001-004 | 状态机可见 | L3 | 001/006 | `getState()` 在投递后为 `starting`；探活成功后 `running`；失败后 `failed` 且为终态 | 真机按序打印状态 | ✅ |
 | TC-001-005 | 失败态不可恢复 | L3 | 001 | `failed` 后再调 `start()` 仍为 `failed`；无任何自动重启路径 | 真机连续调用 + 观察日志 | ✅ |
-| TC-001-006 | 失败原因结构化 | L3 | 001 | 失败态含 `stage` + 原始错误/信号（非只有一句话） | 检查失败态对象字段 | ⬜ 规划未实现（Phase 1） |
-| TC-001-007 | 就绪等待接口 | L3 | 001 | 存在带超时的 `waitUntilRunning`；超时后状态为失败而非静默 | 真机设置短超时 | ⬜ 规划未实现（Phase 1） |
+| TC-001-006 | 失败原因结构化 | L3 | 001 | 失败态含 `stage` + 原始错误/信号（非只有一句话） | 检查失败态对象字段 | ✅ 已接线：`getStage()` / `getLastError()` / `lastCrash()`（`NodeRuntime.ets`）；真机判据属 006 面复跑 |
+| TC-001-007 | 就绪等待接口 | L3 | 001 | 存在带超时的 `waitUntilRunning`；超时后状态为失败而非静默 | 真机设置短超时 | ✅ `waitUntilRunning(timeoutMs)` 已实现（超时/`exited` 进 `failed` 并留证据） |
 | TC-001-008 | 版本下限可见告警 | L3 | 001 | 运行时版本低于下限时出现**可见**告警，不静默继续 | 用低于下限的运行时投放后启动 | ⬜ 规划未实现（Phase 1） |
-| TC-001-009 | 关停钩子 | L4 | 001/003 | `shutdown()` 触发脚本侧注册的收尾钩子并等待窗口期；期间状态为 `stopping` → `stopped` | 真机调用 + 日志 | ⬜ 规划未实现（Phase 1–2） |
-| TC-001-010 | `flags` 载体可表达 | L2 | 001/002 | 默认 `flags` 含 `--expose-internals`；含空格的参数可被正确传递（或明确不支持该形态） | 单元：`split_next()` 切词边界用例 | ⚠️ 当前默认值不含 `--expose-internals`（Phase 1 先修） |
+| TC-001-009 | 关停钩子 | L4 | 001/003 | `shutdown()` 触发脚本侧注册的收尾钩子并等待窗口期；期间状态为 `stopping` → `stopped` | 真机调用 + 日志 | ⚠️ **状态口径已消解**：6 态已实现（`Types.ets:17-24`），`shutdown()` 进入 `stopping`；**脚本侧收尾钩子与等待窗口仍属 Phase 2** |
+| TC-001-010 | `flags` 载体可表达 | L2 | 001/002 | 默认 `flags` 为 `--no-verify-heap`（真机验证值）；`--expose-internals` 仅在载荷走 internal-module stub 路线时由消费方经 `flags`/`execArgv` 显式传入；含空格的参数可被正确传递 | 单元：`split_next()` 切词边界用例 | ✅ 文档化偏差（B5/R2）：默认值不含 `--expose-internals`，理由与替代路线已写明（001 plan §3.5） |
 
 ### 2.3 `002-napi-bootstrap`
 
@@ -71,8 +71,8 @@
 | TC-002-004 | 32 MB detached 线程 | L3 | 002 | 启动线程非 UI 线程（`tid` 与 UI 不同）；进程不因线程栈不足崩溃 | 日志 `thread start; tid=` + `curl /facts` | ✅ |
 | TC-002-005 | SIGSYS shim 防御有效 | L3 | 002 | 记录 `io_uring_setup(425)` 的实际返回值；若被 trap 则 shim 生效且**返回正好 -1**（不得是 `-ENOSYS`） | 日志 + 代码审查（`0xd4000001` 判据 + `regs[0] = (uint64_t)-1`） | ✅（本机返回 8 ⇒ shim 未触发，属设备差异） |
 | TC-002-006 | 崩溃留结构化证据 | L3 | 002/006 | 故意触发崩溃后：日志出现 `CRASH sig=… si_addr=… pc=… lr=… sp=… r0=…` 六项齐全 **且** `last-crash.json` 出现 `{at,stage,signal,hint}` | 真机注入崩溃 + `curl /log` + 读崩溃记录文件 | ✅（C 侧写文件已实现；`--jitless` 缺失场景天然可复现 SIGTRAP） |
-| TC-002-007 | 信号上下文禁用 stdio | L2 | 002 | 崩溃 handler 内**不使用** `printf`/`vsnprintf`/`OH_LOG_Print`；如使用 `snprintf` 只允许**栈上**、无锁、无分配 | 代码审查 + `u64_to_dec()` 单测 | ⚠️ **待宪法侧确认口径**：现用栈上 `snprintf` + 自实现 `u64_to_dec()`（无锁无分配）；S5 字面「只允许裸 `open`/`write`/`close`」 |
-| TC-002-008 | 原生启动失败可上报 | L3 | 001/002 | 删除/改名运行时后启动 ⇒ **能读到** `stage() == "dlopen"` 且 `lastError()` 非空；ArkTS 侧据此进入 `failed` | 真机（临时移除 `libnode.so`）+ `lastError()`/`stage()` | ⚠️ C 侧探针 ✅；**ArkTS 侧未接**（当前静止在 `starting`，Phase 1 先修） |
+| TC-002-007 | 信号上下文禁用 stdio | L2 | 002 | 崩溃 handler 内**不使用** `printf`/`snprintf`/`vsnprintf`/`OH_LOG_Print`/`malloc`/`getenv`；格式化只允许无锁、无分配的纯计算 | 代码审查（handler 区间 0 命中）+ `u64_to_dec()` 单测 | ✅ 已满足（2026-10-17）：handler 用 `u64_to_dec`/`u64_to_hex` + `lb_append*` 拼栈缓冲 + **单次 `write()`**（R2 复核） |
+| TC-002-008 | 原生启动失败可上报 | L3 | 001/002 | 删除/改名运行时后启动 ⇒ **能读到** `stage() == "dlopen"` 且 `lastError()` 非空；ArkTS 侧据此进入 `failed` | 真机（临时移除 `libnode.so`）+ `lastError()`/`stage()` | ✅ 已接线：`getStage()`/`getLastError()` 可读，`NodeRuntime` 在原生错误非空时置 `failed`（真机复跑属验收） |
 | TC-002-009 | 载荷异常不拖垮进程 | L3 | 002/004 | 载荷内抛未捕获异常（或端口冲突）时，宿主进程**不 abort**；日志指出异常来源 | 真机注入 `EADDRINUSE` | ⚠️ C 侧不可控（这是载荷侧责任，硬约束 ⑱）：`payload/bootstrap.js` 仍只有顶层 `try/catch`，**捕获不到异步异常** ⇒ Phase 1 先修 |
 | TC-002-010 | stdio 排空（无 ArkWeb 白屏） | L4 | 002/006 | 大量 stdout 输出时宿主 Web 组件**仍绘制**（前后 `dumpLayout` 有差异）；日志不混入宿主导出 | 真机压测 + 截图 | ✅ 机制已落（fd0→`/dev/null`、fd1/2→pipe + 独立 reader 线程）；⬜ 真机压测取证未做 |
 

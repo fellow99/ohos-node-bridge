@@ -25,7 +25,7 @@
 | ArkTS | `@kit.CoreFileKit` → `fileIo as fs` | `statSync`/`openSync(READ_ONLY)`/`readSync(fd, buf, {offset, length})`/`closeSync`；`mkdirSync`；`OpenMode.CREATE\|READ_WRITE\|TRUNC` | ✅ `Logger.ets:2,29-42`、`Env.ets:2,30-36,57-61` |
 | ArkTS | `@kit.LocalizationKit` → `resourceManager` | `getRawFileContentSync(name): Uint8Array`（物化 rawfile 到沙箱） | ✅ `Env.ets:3,56` |
 | ArkTS（规划） | `@kit.ArkTS` → `util.TextDecoder` / `buffer` | 字节 → UTF-8 字符串（**替代现状的逐字节 `String.fromCharCode`**） | ⬜ 待实现；见 §6.2 |
-| C | `hilog/log.h` | `#undef LOG_DOMAIN/LOG_TAG` → `0xD003300` / `"NODE_BRIDGE"`；`OH_LOG_Print(LOG_APP, LOG_INFO, …)` | ✅ `node_bridge.c:18,36-39,69` |
+| C | `hilog/log.h` | `#undef LOG_DOMAIN/LOG_TAG` → `0xD0033` / `"NODE_BRIDGE"`（**必须**与 ArkTS 侧 `Logger.ets` 相同，A1/R2）；`OH_LOG_Print(LOG_APP, LOG_INFO, …)` | ✅ `node_bridge.c` |
 | C | POSIX | 信号上下文只用 `open(O_WRONLY\|O_CREAT\|O_APPEND, 0644)`/`write`/`close`；`sigaction(SA_SIGINFO\|SA_RESETHAND)`；`signal(SIG_DFL)` + `raise`；`dup2`/`pipe`/`pthread_create`（Phase 1） | ✅ `node_bridge.c:53-60,108-121,185-192,257` |
 | Node（载荷侧） | `node:http` + `node:fs` + `node:os` | `http.createServer` 暴露 `/facts`、`/log`；`fs.readFileSync`/`os.homedir()/tmpdir()/networkInterfaces()/cpus()` | ✅ `selfcheck.js:15-17,30-79` |
 | Node（host 侧工具，Phase 1） | `node:fs` + 正则 + JSON | `tools/smoke-host.mjs` 做不接真机的门禁：崩溃行解析、`/facts` schema 断言、tail 算法 fixture 测试 | ⬜ 规划 §7.2/§7.4（`tools/smoke-host.mjs`，Phase 1） |
@@ -46,13 +46,13 @@
 | **C6** 诊断优先于修码 | 必须在真机上**看得见**；崩溃必须留**结构化证据**；禁用假判据 | `CRASH …` 行 ✅（`node_bridge.c:100-112`）；`/facts` ✅（`selfcheck.js:60-64`）；⬜ 日志环/崩溃记录 JSON/级别选择缺失 | 🔶 部分（本模块主体工作就是补齐 C6） |
 | **C7** 零上游补丁 | 用现成机制；不打补丁 | 只用 hilog/fileIo/POSIX/http/fs ✅；无补丁、无 LD_PRELOAD、不碰 G11（路线 J′）✅ | ✅ 合规 |
 | **S1** ArkTS 严格模式 + `.d.ts` | 不出现 `any`/`unknown`；原生模块只经环境声明 | `Logger.ets`/`Env.ets` 无 `any` ✅（`data.buffer as ArrayBuffer` 是断言）；原生经 `import nodeBridge from 'libnode_bridge.so'` + `index.d.ts` ✅ | ✅ 合规（新增 `logs()` 时保持 JSON 字符串边界，避免 `any`） |
-| **S2** barrel 唯一出口 | 新公共 API 必须同改 `Index.ets` + `Types.ets` | `Index.ets:20-21` 已导出 `Logger`/`Env` ✅；⬜ `logs()`/`lastCrash()`/`logRingSize` 未加 | ⚠️ **需改**（FR-006-028） |
-| **S3** 类型改动即破坏性变更 | `Types.ets` 是对外契约 | `Types.ets:1-5` 已声明 ✅；新增 `NodeLogEntry`/`CrashRecord` 属**破坏性变更** | ⚠️ **需改**（提语义化版本 + 变更流程） |
+| **S2** barrel 唯一出口 | 新公共 API 必须同改 `Index.ets` + `Types.ets` | ✅ 已加：`Types.ets` 含 `NodeLogEntry`/`CrashRecord`，`NodeRuntime` 提供 `logs()`/`lastCrash()`/`logRingSize`；`Index.ets` 已导出 `NodeRuntime`/`Logger`/`Env` ✅ | ✅ 合规（FR-006-028） |
+| **S3** 类型改动即破坏性变更 | `Types.ets` 是对外契约 | ✅ `Types.ets:1-5` 已声明；`NodeLogEntry`/`CrashRecord` 已落地（契约 §2.5 冻结；此前的「属破坏性变更」判断已按变更流程执行） | ✅ 已执行变更流程 |
 | **S4** 路径一律绝对 | 不依赖 `cwd`/`execPath` | `Env` 全部基于 `context.filesDir` ✅；⚠️ `selfcheck.js:67` 用 `process.env.HOME + '/payload/node.log'` 拼路径（`HOME` 空时变成 `/payload/node.log`） | ⚠️ **需改**（改由库显式传入/环境变量 `NODE_BRIDGE_LOG_PATH`） |
-| **S5** 信号上下文禁用 stdio | handler 内只允许裸 `open`/`write`/`close`，禁止 `printf`/`vsnprintf`/`OH_LOG_Print` | ⚠️ `crash_handler` 用 `snprintf`（`node_bridge.c:103`）与 `strlen`（:109）；`raw_write` 用 `strlen`（:57） | ⚠️ **需改**（手写十进制/十六进制格式化） |
+| **S5** 信号上下文禁用 stdio | handler 内只允许裸 `open`/`write`/`close`，禁止 `printf`/`vsnprintf`/`OH_LOG_Print` | ✅ 已修（2026-10-17）：`crash_handler` 手写 `u64_to_dec`/`u64_to_hex` + `lb_append*` + **单次 `write()`**；handler 区间 0 命中 stdio/malloc/getenv | ✅ 合规（D6 关闭） |
 | **S6** native 产物落点 | CMake 设 `CMAKE_LIBRARY_OUTPUT_DIRECTORY` | ✅ `CMakeLists.txt` 已设 → `libs/${OHOS_ARCH}` | ✅ 不受影响 |
 | **S7** 引导件不链接 libnode | `dlopen` 运行期完成 | ✅ `CMakeLists.txt` 只链 `libace_napi.z.so`/`libhilog_ndk.z.so` | ✅ 不受影响 |
-| **S8** C 侧只有 3 个接口 | 扩展 NAPI 面必须同改 `.d.ts` | ✅ 现状 3 个（`node_bridge.c:285-293`、`index.d.ts:8-15`）；⬜ 若加 `logs()`/`readLogTail()` 必须同改 | ⚠️ **需改**（属 002 接口扩展，需跨模块同步） |
+| **S8** C 侧接口 | 扩展 NAPI 面必须同改 `.d.ts` | ✅ 现状 **5 个符号**（`start`/`isRunning`/`version`/`lastError`/`stage`，`start` 6 参；`Init()` + `index.d.ts` 同步；契约 §1.1） | ✅ 合规（2026-10-17 扩充） |
 | **S9** 日志双通道 + 读失败返回占位串 | 关键信息同时进 hilog 与文件；文件读取失败**不抛** | 🔶 ArkTS `Logger.info/warn/error` **只有 hilog**（`Logger.ets:14-24`）；C 侧 `log_line` 双通道 ✅；`tail` 失败返回占位串 ✅ | ⚠️ **需改**（ArkTS 侧补落盘通道，或明确「ArkTS 侧日志只进 hilog」的例外并存档） |
 | **S10** 二进制不入库 | — | 本模块不引入二进制 ✅ | ✅ 不受影响 |
 | 红线 G3/G4/G5/G11 | 无浏览器内核 / 许可 / ELF / 不绕签名 | 本模块只改源码与文档；不引入内核、不改 ELF、不碰 J′ ✅ | ✅ 不触红线 |
@@ -184,23 +184,23 @@
 | `payloadDir` | `static payloadDir(context: common.Context): string` | `<filesDir>/payload`（绝对路径，S4） | ✅ :15-17 |
 | `tmpDir` | `static tmpDir(context: common.Context): string` | `<filesDir>/tmp` | ✅ :20-22 |
 | `logPath` | `static logPath(context: common.Context): string` | `<filesDir>/payload/node.log` | ✅ :25-27 |
-| `crashPath`（规划） | `static crashPath(context: common.Context): string` | `<filesDir>/node-bridge/last-crash.json` | ⬜ 不存在 |
+| `crashPath`（规划） | `static crashPath(context: common.Context): string` | `<filesDir>/node-bridge/last-crash.json` | ✅ 已实现（`Env.ets:40-41`，与 C 侧 `g_crash_path` 同源） |
 | `ensureDir` | `static ensureDir(path: string): void` | 幂等建目录（不递归）；失败**必须可见** | 🔶 :30-36（空 `catch` ⚠️） |
 | `ensureRuntimeDirs` | `static ensureRuntimeDirs(context: common.Context): void` | 建 `payload/` + `tmp/` | ✅ :39-42 |
-| `materializeRawfile` | `static materializeRawfile(mgr: resourceManager.ResourceManager, rawName: string, destPath: string): string` | 把 rawfile 落到沙箱并返回路径 | ✅ :51-64 / ⚠️ `writeSync(fd, data.buffer)` 忽略 `byteOffset`/`byteLength`（§6.5 缺陷 6） |
+| `materializeRawfile` | `static materializeRawfile(mgr: resourceManager.ResourceManager, rawName: string, destPath: string): string` | 把 rawfile 落到沙箱并返回路径 | ✅ 已实现；**A5 已修**：只写视图覆盖的字节（`byteOffset`/`byteLength`，`Env.ets`），不再有「多写 backing buffer」风险 |
 
 **`NodeRuntime` 新增方法（规划，属 001 的类型扩展）**
 
 | 方法 | 签名 | 行为契约 | 状态 |
 |---|---|---|---|
-| `logs` | `logs(): NodeLogEntry[]` | 返回**当前**日志环快照（≤ `logRingSize`，默认 500 行，时间序）；不抛（无实现时返回 `[]` 并在 hilog 留 `warn`） | ⬜ |
-| `lastCrash` | `lastCrash(): CrashRecord \| null` | 读 `<filesDir>/node-bridge/last-crash.json`；失败降级解析 `CRASH` 行；都没有 ⇒ `null` | ⬜ |
+| `logs` | `logs(count?): NodeLogEntry[]` | 读日志尾成条目数组（≤ `logRingSize`，默认 500 行，时间序）；不抛（失败返回 `[]` 并在 hilog 留 `warn`） | ✅ 已实现（`NodeRuntime.ets`；B3/R2 复核） |
+| `lastCrash` | `lastCrash(): CrashRecord \| null` | 读 `<filesDir>/node-bridge/last-crash.json`；失败降级解析 `CRASH` 行；都没有 ⇒ `null` | ✅ 已实现（`NodeRuntime.ets`，含降级路径；B3/R2 复核） |
 
 **HTTP 端点**（`payload/selfcheck.js` 提供；观测面唯一不依赖 `hdc` 文件权限的读回通道）
 
 | 方法与路径 | 状态码 / 类型 | 正文契约 | 现状 |
 |---|---|---|---|
-| `GET /facts` | `200` + `application/json` | `{at, checks{14}}`；单项失败以 `"ERR:…"` 留在 JSON 内，端点本身不 500 | ✅ :61-64 |
+| `GET /facts` | `200` + `application/json` | `{at, checks{16}}`（16 个冻结键，含 `spawn`）；单项失败以 `"ERR:…"` 留在 JSON 内，端点本身不 500 | ✅ `payload/selfcheck.js`（`smoke-host` 阶段④逐键对齐） |
 | `GET /log` | `200` + `text/plain` | 日志尾（默认 ≤ 8192 B）；读失败 ⇒ `200` + `(read failed: …)` | 🔶 :66-77（全量读 + 码元切 ⚠️） |
 | 其它路径 | `404` | `not found` | ✅ :78-79 |
 | 监听 | `127.0.0.1:${SELFCHECK_PORT \|\| 15577}` | 仅 loopback；⚠️ 与消费方应用/探针应用**会争端口**（§D.10 ⑰）⇒ 测谁就 force-stop 另一个 | ✅ :19,82-84 |
@@ -224,7 +224,7 @@
 | 桥件行前缀 | `[node_bridge] `（例：`[node_bridge] dlopen('libnode.so') -> OK`、`[node_bridge] io_uring_setup(425) -> 8 (errno=0)`、`[node_bridge] node::Start returned rc=… errno=…`） | ✅ `node_bridge.c:139,156,170,174,179,181,216-217,223,262,268` |
 | 崩溃行 | `CRASH sig=%d si_addr=%p pc=%p lr=%p sp=%p r0=%p`，**无前缀**，单行，单次 `write` | ✅ :104-109 |
 | 载荷行 | 无强制前缀；参考实现用 `[bootstrap] `（`bootstrap.js:17`）与 `[selfcheck] `（`selfcheck.js:83`） | ✅ |
-| hilog tag | 统一 `NODE_BRIDGE`；domain 两侧不同（ArkTS `0xD0033` vs C `0xD003300`，见 §6.5 缺陷 4） | ⚠️ |
+| hilog tag | 统一 `NODE_BRIDGE`；domain **两侧已统一为 `0xD0033`**（A1/R2，2026-10-17 关闭缺陷 4） | ✅ |
 | 换行 | 固定 `\n`（不用 `\r\n`） | ✅ |
 | 行时间戳 | **不写进行内**（历史证据无时间戳，加进去会让解析器分叉）；时间只存在于日志环条目 `at` 与崩溃记录 `at` | ⚠️ 现无时间信息（`Logger.tail` 无法给出时刻） |
 | 行上限 | ≤ 2048 B（超出截断 + `…[truncated]`） | ⬜ |
@@ -238,7 +238,7 @@
 ```
 写入 ① ArkTS Logger.info/warn/error ──▶ hilog（domain 0xD0033, tag NODE_BRIDGE）
                                         ⬜ + 文件（S9 的双通道；待定：写 node.log 还是 node-bridge/arkts.log）
-写入 ② C 桥件 log_line ──▶ OH_LOG_Print（domain 0xD003300）+ node.log（raw_write）
+写入 ② C 桥件 log_line ──▶ OH_LOG_Print（domain 0xD0033）+ node.log（raw_write）
        崩溃 handler ──▶ node.log 的 CRASH 行（裸 write）
                        ⬜ + <filesDir>/node-bridge/last-crash.json（单次 write）
 写入 ③ Node 侧 stdout/stderr ──▶ 现状：dup2(fd,1|2) 直接进 node.log
@@ -400,9 +400,9 @@ handler 只做：`clock_gettime` → 手写 JSON 到**预分配的静态缓冲**
 | 1 | **UTF-8 转码错误**：逐字节 `String.fromCharCode` | `Logger.ets:45-47` | 所有非 ASCII 日志（中文/emoji/UTF-8 路径）读到的是乱码；诊断面板与 `/log` 可读性受损 | §6.2 A：`util.TextDecoder`（或 `buffer`）一次解码 + 丢截断首行 |
 | 2 | **未用 `readSync` 的实际字节数** | `Logger.ets:37-48` | 并发写/截断时尾部可能带 NUL 填充 | 用返回值 `n` 做 `subarray(0, n)` |
 | 3 | **`maxBytes` 无默认值/上界，`≤0` 语义未定义** | `Logger.ets:27,34-48` | 调用方传巨大值 ⇒ 一次分配打爆内存；传 0 ⇒ 返回 `''`（与「读成功但空」不可区分） | §6.2 A：`TAIL_DEFAULT`/`TAIL_MAX` + 显式占位串 |
-| 4 | **hilog domain 两侧不一致**（ArkTS `0xD0033` vs C `0xD003300`） | `Logger.ets:4`、`node_bridge.c:38` | 用一条 `hilog -D` 过滤**拿不到全部**库日志；排障者要试两个域（或不过滤） | 二选一并写进 §5.3 协议（推荐统一为 `0xD003300`，与既有 C 侧及历史证据一致；改 ArkTS 侧一行，属可逆） |
-| 5 | **`crash_handler` 用 `snprintf` / `strlen`** | `node_bridge.c:103,109`（`raw_write` 的 `strlen` :57） | 违反宪法 S5；理论上有自死锁/二次崩溃风险，崩溃证据可能一起丢 | 手写 `fmt_dec`/`fmt_hex` + 静态缓冲 + 单次 `write`（§6.2 E） |
-| 6 | **`materializeRawfile` 忽略 `byteOffset`/`byteLength`** | `Env.ets:59`（`fs.writeSync(file.fd, data.buffer as ArrayBuffer)`） | 若 `getRawFileContentSync` 返回的是池化缓冲上的视图，会多写尾部字节 ⇒ 载荷损坏（且是「写成功」型隐蔽 bug） | 写 `data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)`，或按 `byteOffset/byteLength` 显式写 |
+| 4 | **hilog domain 两侧不一致**（ArkTS `0xD0033` vs C `0xD003300`） | `Logger.ets`、`node_bridge.c` | 用一条 `hilog -D` 过滤**拿不到全部**库日志；排障者要试两个域（或不过滤） | ✅ **已修（A1/R2，2026-10-17）**：**统一为 `0xD0033`**（改 C 侧 `LOG_DOMAIN`，与 ArkTS 侧及消费方 `pi-desktop-ark` 的 `Constants.ets` 一致）；两文件均加「必须相同」注释，构建产物 `mov w2,#0x33; movk w2,#0xd,lsl#16` 佐证 |
+| 5 | **`crash_handler` 用 `snprintf` / `strlen`** | 历史：`node_bridge.c:103,109`（行号属旧快照） | 违反宪法 S5；理论上有自死锁/二次崩溃风险，崩溃证据可能一起丢 | ✅ **已修（2026-10-17）**：手写 `u64_to_dec`/`u64_to_hex` + `lb_append*` 栈缓冲 + 单次 `write`（§6.2 E） |
+| 6 | **`materializeRawfile` 忽略 `byteOffset`/`byteLength`** | `Env.ets`（旧 `fs.writeSync(file.fd, data.buffer as ArrayBuffer)`） | 若 `getRawFileContentSync` 返回的是池化缓冲上的视图，会多写尾部字节 ⇒ 载荷损坏（且是「写成功」型隐蔽 bug） | ✅ **已修（A5/R2，2026-10-17）**：按 `byteOffset`/`byteLength` 只写视图覆盖的字节（offset=0 且等长时零拷贝） |
 | 7 | **`Env.ensureDir` 空 `catch`** | `Env.ets:33-35` | 违反 C2：目录没建成也只能等后续 `open` 失败，排查无落点 | catch 里 `Logger.error('ensureDir failed: ' + path + ' ' + JSON.stringify(e))`（不重抛，保持幂等） |
 | 8 | **`log_line` 把换行拆成第二次 `open/write/close`** | `node_bridge.c:70-71` | 成本翻倍；多线程下两个 fd 各自 `O_APPEND` ⇒ 行可被交错 | 单次写（缓冲内拼 `\n`）+ 常开 fd（§6.4） |
 | 9 | **`dup2` 同 fd 混流** | `node_bridge.c:187-188` | 宿主 ArkWeb/Chromium 原生输出混进 `node.log`（§D.10 ⑱ 实测）；`/log` 16 KB 里几乎全是 `arkweb/chromium_ext/…` | Phase 1：pipe + 独立 reader 线程 + 通道分离（§9 P1-006-01/02） |
@@ -412,7 +412,7 @@ handler 只做：`clock_gettime` → 手写 JSON 到**预分配的静态缓冲**
 | 13 | **日志无轮转、无行上限、无时间戳** | `node_bridge.c:55,185` | 长跑后文件无限增长；`/log`/`tail` 的可预测性与内存上界失去保障；读回的文本无法定位时刻 | §4.5 的轮转规则 + 行上限；时间只在环条目上打点（兼容） |
 | 14 | **`payload/README.md` 声称自检含 `spawn`，实现里没有** | `payload/README.md:9` vs `selfcheck.js:30-58` | 文档与实现不一致 ⇒ 审计者按文档取证据会落空 | 要么补检查项（FR-006-025），要么改文档（二选一，**不得**两边都放着） |
 | 15 | **规划附录 A 的 hilog 过滤命令大小写不符** | `docs/000-工程规划.md:910`：`grep -E "node-bridge\|Cpp Crash"` vs tag `NODE_BRIDGE`（`node_bridge.c:39`） | 照抄命令会**漏掉**本库的所有 hilog 行（`grep` 区分大小写） | 改用 `grep -E "NODE_BRIDGE\|Cpp Crash"` 或加 `-i`；本规格 FR-006-031 的交付文档必须用可命中的模式 |
-| 16 | **`Env.ets`/`NodeRuntime.ets` 的路径与规划不一致** | 代码 `<filesDir>/payload/node.log`（`Env.ets:26`、`Types.ets:32`、`NodeRuntime.ets:75`）vs 规划 §5.3 `payloadRoot = <filesDir>/node-bridge/payload`、§5.7 崩溃记录 `<filesDir>/node-bridge/last-crash.json` | 消费方按规划写代码会找不到日志；崩溃记录一旦落在另一个目录，`lastCrash()` 与 `/log` 会各读一份 | 统一决策（§9 P1-006-15）：**推荐**日志与崩溃记录都放 `<filesDir>/node-bridge/`（日志旧路径保留一个**只读别名/回退探测**以兼容既有证据），并同步规划 §5.3/§5.7 与 `Types.ets` 的注释 |
+| 16 | **`Env.ets`/`NodeRuntime.ets` 的路径与规划草案不一致** | 实现：`<filesDir>/payload`（`Env.ets`）、日志 `<filesDir>/payload/node.log`、崩溃记录 `<filesDir>/node-bridge/last-crash.json` | 规划 §5.5/§5.7 **草案**写 `payloadRoot = <filesDir>/node-bridge/payload` | ✅ **已定案（B6/R2，2026-10-17）**：以**实现值**为准（payload 根 = `<filesDir>/payload`；崩溃记录 = `<filesDir>/node-bridge/last-crash.json`；三处同源：`Env`/`Types`/`NodeRuntime`）；规划草案措辞已被本决策取代（`docs/000-工程规划.md` 保留历史措辞，不再作为实现口径） |
 | 17 | **`Logger.info/warn/error` 只有 hilog、不落盘** | `Logger.ets:14-24` | 宪法 S9 的「双通道」在 ArkTS 侧未满足；ArkTS 侧关键事件（`NodeRuntime.ets:85,94,112`）在 hilog 缓冲里可能被冲掉 | 二选一：① 让 `Logger` 也追加到文件（新通道 `arkts.log`，避免与 Node stdout 混行）；② 明确记录「ArkTS 侧只进 hilog」的**例外**并经评审（C2 要求失败可见，`hilog` 通常足够，但长跑会丢）。推荐 ① |
 
 > 说明：#1/#2/#3（`tail` 的 UTF-8、实际字节数、入参边界）与 #8/#9/#10（ioctl/混流/排空）是本模块最靠前的两类真实缺陷；

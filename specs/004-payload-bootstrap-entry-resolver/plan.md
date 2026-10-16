@@ -52,7 +52,7 @@
 | **S5 信号上下文禁用 stdio** | 本模块日志**不在**信号上下文内（崩溃 handler 在 C 侧，属 002） | ✅ 不违反 |
 | **S6 native 产物落点** | 不涉及（本模块零 native 产物） | ✅ 不适用 |
 | **S7 引导件不链接 libnode** | 不涉及 | ✅ 不适用 |
-| **S8 C 侧接口只有 3 个** | 不涉及（本模块不改 `.c`，不改 `.d.ts`） | ✅ 不适用 |
+| **S8 C 侧接口 5 个**（`start` 6 参） | 不涉及（本模块不改 `.c`，不改 `.d.ts`） | ✅ 不适用 |
 | **S9 日志双通道 + 读失败占位串** | `/log` 读失败返回 `(read failed: …)` 且不抛异常；载荷日志同时写 stdout（⇒ 进 `node.log`/hilog 通道） | ✅ 满足（FR-004-034/036） |
 | **S10 二进制不入库** | `payload/*.js` 是纯文本 ⇒ 可入库；载荷本体（`tar.gz`/`pi-web` 产物）不入库，由消费方投放 | ✅ 满足（`.gitignore` 由消费方保证） |
 
@@ -76,7 +76,7 @@
 - **依据**：🔶 旧壳 `main.js:499-500` 的注释是**一线教训**：「只比目录存在性 ⇒ 就地升级不生效，必须 `hdc uninstall` 重装」；旧壳因此改成「marker 内容 === 期望 SHA-256」并额外做入口复检（`main.js:517-524`）。
 - **为什么不是 mtime**：源解包器**不恢复条目 mtime**（`tar-extract.js` 不调用 `utimes`），解出来的文件 mtime = 解包时刻 ⇒ 无法区分「两次解包」与「同一载荷」；用 mtime 判据还会要求「先 stat 全部 27.2k 文件」。
 - **为什么不是大小**：内容变化不一定改大小（例如同长度替换）；大小只能证明「像」，不能证明「是」。
-- **为什么 marker 与归档同目录**：`<payloadRoot>/<archive 基名>.sha256` 随目标目录一起清理，不污染归档内容（🔶 旧壳把 marker 写在 `<userData>/`，不写进 `pi-dist` 内，见 `main.js:44-45`）。
+- **为什么 marker 在目标目录内**：marker = `<payloadRoot>/.ready-<sha256 前 12 位>`（**B7/R2**：不是 `<archive 基名>.sha256`），随目标目录一起清理，不污染归档内容（🔶 旧壳把 marker 写在 `<userData>/`，不写进 `pi-dist` 内，见 `main.js:44-45`）。
 - **幂等的复检闭环**：marker 一致 **且** 入口可读 ⇒ 跳过；否则强制重解包（解压中途被杀会留下「看似完整」的树）。
 
 ### 3.4 为什么 `require` 失败要退 `import()`
@@ -129,7 +129,7 @@
 | 字段 | 规划 §5.3 语义 | 现状（`library/src/main/ets/runtime/Types.ets:16-34`） | 归属 |
 |---|---|---|---|
 | `entry` | 入口 JS：相对 `payloadRoot` 的路径，或绝对路径 | ⬜ 不存在（现有 `scriptPath: string` 是**引导脚本**路径，语义不同） | `001` + 本模块消费（§8 P1-11） |
-| `payloadRoot` | Node 可写根，默认 `<filesDir>/node-bridge/payload` | ⬜ 不存在 | `001` |
+| `payloadRoot` | Node 可写根，默认 `<filesDir>/payload`（**实现值**；规划草案曾写 `<filesDir>/node-bridge/payload`，已被取代，B6/R2） | ✅ 已实现（`Types.ets` `payloadRoot?`、`Env.payloadDir`） | `001` |
 | `archive` | 载荷 `tar.gz`：资源名（rawfile）或真实路径；**给出即自解包** | ⬜ 不存在 | `001` |
 | `archiveSha256` | 幂等 marker 判据；缺省则由库计算一次并落盘记下 | ⬜ 不存在 | `001` + 本模块消费（FR-004-007） |
 | `argv` | 传给 Node 的 `argv`（默认 `['node', <entry abs>]`） | ⬜ 不存在（`002` 的 C 侧自组 argv：`node <flags…> <scriptPath>`） | `001`/`002` |

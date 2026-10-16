@@ -49,7 +49,7 @@
 | S5 | 信号上下文禁用 stdio | ✅ 不涉及（桥不写信号 handler）；⬜ 提醒：桥的日志**禁止**出现在崩溃 handler 里，崩溃取证属 002 | §5.10 第 2 条 |
 | S6 | native 产物落点固定 | ✅ 本模块不改 CMake；⬜ 若新增桥件 C 文件，仍须落在 `library/src/main/cpp` 并受 `CMakeLists.txt:11-12` 约束 | `library/src/main/cpp/CMakeLists.txt`（16 行） |
 | S7 | 引导件不链接 libnode | ⚠️ Phase 2 新增桥件时必须守住（`dlopen` 期由 Node 提供 `napi_*`） | R18；P0-11 ⬜ |
-| S8 | C 侧接口只有 3 个；扩展 NAPI 面必须同步 `.d.ts` | ⚠️ 线程安全传输层**必须**扩展 NAPI 面（如 `hostCreate` / `hostDispatch` / `hostSetResult`）：`.d.ts` 必须同步（S8 硬要求），并需按宪法变更流程 §六 登记 S8「3 个」口径的更新（**不是**偷偷加接口） | `node_bridge.c:285-293` |
+| S8 | C 侧接口**现为 5 个**（2026-10-17 扩充）；扩展 NAPI 面必须同步 `.d.ts` | ⚠️ 线程安全传输层**必须**继续扩展 NAPI 面（如 `hostCreate` / `hostDispatch` / `hostSetResult`）：`.d.ts` 必须同步（S8 硬要求），并需按宪法变更流程 §六 登记 S8 口径的更新（**不是**偷偷加接口） | `node_bridge.c` `Init()` |
 | S9 | 日志双通道；读日志失败返回占位串而不抛异常 | ⚠️ 桥未接 `Logger`（缺陷 F）；`Logger.tail` 已符合「失败返回占位串」 | `Logger.ets:27-52` |
 | S10 | 二进制不入库 | ✅ 不涉及（桥不引入二进制） | `.ohpmignore`；`runtime.lock.json` |
 

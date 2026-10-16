@@ -53,12 +53,12 @@
 
 | 原则 | 判定 | 理由（含证据） | 待处置 |
 |---|---|---|---|
-| **C1 库/壳分离** | ⚠️ **部分符合** | 库侧 ArkTS/原生代码零应用语义 ✅（`index.d.ts`/`Types.ets`/`HostBridge.ets`/`Env.ets`/`node_bridge.c` 均无 pi/Next/窗口语义）；`module.json5` 只有 2 条开放权限，并明文把 ACL 留给消费方 ✅。**但随库分发的 `payload/bootstrap.js:43,49,52` 出现 `PI_WEB_ENTRY`**（应用特有变量名） | Phase 1 改为通用变量名（消费方经 `env` 传入）；评审按「是不是宿主语义」一票否决 |
-| **C2 不隐藏平台真相** | ⚠️ **部分符合（C 侧已大幅补齐）** | 未注册能力返回结构化 `{"ok":false,"error":"unregistered"}` ✅（`HostBridge.ets:35-39`）；处理器抛错也结构化 ✅；`provision.mjs` 门禁不过即 `exit 2` ✅；**C 侧新增 `stage()`/`lastError()` 并写入原生失败路径（stdio/`dlopen`/`dlsym`/`pthread_create`/重复投递）** ✅ | 剩余：**ArkTS 侧未消费这两个探针**（失败时仍可能停在 `STARTING`）；版本下限（`>=22.19.0`）无 warn ⬜ |
-| **C3 让最终使用者去读** | ⚠️ **部分符合** | 读回通道已建：`Logger.tail()`（文件不可读返回占位串不抛）✅、自检 `/log` 端点 ✅。**缺口**：核心机制「Node 自己解包（谁写谁读）」⬜ 未实现；`Env.materializeRawfile` 是 **ArkTS 写**（`Env.ets:51-64`），只对小文件安全 | Phase 1：`payload` 自解包 + 解包后**用 Node 读回**作为唯一判据 |
+| **C1 库/壳分离** | ✅ **符合** | 库侧 ArkTS/原生代码零应用语义 ✅；`module.json5` 只有 2 条开放权限，并明文把 ACL 留给消费方 ✅；✅ 2026-10-17：随库分发的 `payload/bootstrap.js` 的 `PI_WEB_ENTRY` 兼容别名**已删除**（入口只认 `NODE_BRIDGE_ENTRY`，C1 / FR-004-020） | 保持：评审按「是不是宿主语义」一票否决 |
+| **C2 不隐藏平台真相** | ✅ **符合（2026-10-17 补齐）** | 未注册能力返回结构化 `{"ok":false,"error":"unregistered"}` ✅（`HostBridge.ets`）；处理器抛错也结构化 ✅；`provision.mjs` 门禁不过即 `exit 2` ✅；C 侧 `stage()`/`lastError()` 写入所有原生失败路径 ✅；**ArkTS 侧已接线**：`getStage()`/`getLastError()` 可读，原生错误非空时置 `failed`（`NodeRuntime.ets`）✅ | 剩余：版本下限（`>=22.19.0`）无 warn ⬜ |
+| **C3 让最终使用者去读** | ✅ **符合** | 读回通道齐备：`Logger.tail()`（不抛）✅、自检 `/log` 端点 ✅；✅ 2026-10-17：`payload/bootstrap.js` 已实现 **Node 自解包（`zlib`+`fs`，含 `skipped` 计数）** + `.ready-<sha256 前 12 位>` 幂等 marker + `uncaughtException`/`unhandledRejection` 兜底写 `app.log`（谁写谁读闭环） | 保持 |
 | **C4 启动参数不可事后修改** | ✅ **符合** | `flags` 一次性传入（`NodeRuntime.ets:76,82`），公共 API 无追加参数入口；`--jitless` 在类型注释中被明确定位为「无 ACL 的兜底/诊断」（`Types.ets:20-23`）；原生层在启动前一次性切词（`bootstrap()` / `split_next()`） | 保持；评审时检查任何新 API 不得引入 push |
 | **C5 单例与不可重启** | ⚠️ **部分符合** | 单例 + 幂等保护 ✅（`NodeRuntime.ets:26-31,62-69`，返回结构化失败并带当前状态）；无看门狗/自动重启 ✅。**缺口**：`markFailed` 只落状态与一条 hilog，**不保留「首次失败原因」结构**（`NodeRuntime.ets:108-114`）；`failed` 未携带 `stage` + 原始错误/信号（规划 §5.2 要求） | Phase 1：`failed` 载体扩展（stage / signal / 原始错误） |
-| **C6** 诊断优先于修码 | ⚠️ **部分符合** | 崩溃 handler 记录 `CRASH sig=… si_addr=… pc=… lr=… sp=… r0=…` ✅ 且**写 `<HOME>/node-bridge/last-crash.json`** ✅（`crash_handler()`）；端到端自检 `/facts` ✅；双日志通道 + pipe 排空 ✅。**缺口**：ArkTS 侧 `lastCrash()` 读取接口 + 日志环 + `--inspect` 的 buildMode 门禁 ⬜ | Phase 1（`006`/`001`） |
+| **C6** 诊断优先于修码 | ✅ **符合（2026-10-17 补齐）** | 崩溃 handler 记录 `CRASH …` ✅ 且写 `<HOME>/node-bridge/last-crash.json`（+ `hint` 阶段提示）✅；`/facts` 16 键自检 ✅；双日志通道 + pipe 排空 ✅；**ArkTS 侧已实现 `lastCrash()`（含降级）与 `logs()`/`logRingSize`** ✅；仅内存日志环未做 | 保持；`--inspect` buildMode 门禁 ⬜（Phase 1 收尾） |
 | **C7** 零上游补丁 / 二进制可替换 | ✅ **符合** | 引导件**不链接** libnode（`CMakeLists.txt`）⇒ 换版本只需改 `runtime.lock.json` 一行；供应链纪律齐备（`source` + `sha256` + `license` + `verifiedOn/verifiedDevice/verifiedNotes`）✅；七项门禁把「PIE 产物」做成硬失败 ✅；未对上游打任何补丁 ✅ | 保持；新增运行时必须走锁文件 + 门禁 + 真机复验（宪法 §六变更流程 2） |
 
 ### 2.2 十条代码规约（S1–S10）
@@ -69,14 +69,14 @@
 | **S2** barrel 唯一出口 | ✅ **符合** | `Index.ets:16-21` 导出 8 个符号（`NodeRuntime` / `NodeState` / `NodeRuntimeOptions` / `NodeStartResult` / `HostBridgeHandler` / `HostBridge` / `Logger` / `Env`）；新增公共 API 必须同改 `Index.ets` 与 `Types.ets` |
 | **S3** 类型改动即破坏性变更 | ✅ **符合** | `Types.ets:4` 文件头明文声明契约属性 |
 | **S4** 路径一律绝对（不依赖 `cwd`/`execPath`） | ⚠️ **部分符合** | 库侧全部用 `context.*Dir` 与 `Env` 拼绝对路径 ✅（`Env.ets:15-27`、`NodeRuntime.ets:73-75`）；`payload/bootstrap.js:27-28` 明确注释两者不可依赖 ✅。**缺口**：规划 §5.5 的「`cwd` 选项」⬜ 未实现（当前无 `cwd` 设置入口） |
-| **S5** 信号上下文禁用 stdio | ⚠️ **部分符合（需口径确认）** | `sigsys_handler` ✅ 只做寄存器操作；`crash_handler` 改用**栈上 `snprintf`** + 自实现 `u64_to_dec()`（无锁、无分配、无 `OH_LOG_Print`），`vsnprintf` 只出现在非信号路径的 `log_line()`。宪法 S5 字面要求「只允许裸 `open`/`write`/`close`」⇒ 需宪法侧确认栈上 `snprintf` 是否可接受 | 若不可接受：改为纯手写转换（`u64_to_dec` 已有，扩展出十六进制版本即可） |
+| **S5** 信号上下文禁用 stdio | ✅ **符合（2026-10-17 修复）** | `sigsys_handler` 只做寄存器操作 ✅；`crash_handler` 已改为手写 `u64_to_dec`/`u64_to_hex` + `lb_append*` 拼栈缓冲 + **单次 `write()`**，handler 区间 **0 命中** `printf`/`snprintf`/`vsnprintf`/`OH_LOG_Print`/`malloc`/`getenv`（`vsnprintf` 只在非信号路径 `log_line()`）；`sig_name`/`stage_hint` 只剩纯比较 | 保持（改 handler 必须重跑静态审查） |
 | **S6** native 产物落点固定 | ✅ **符合** | `CMakeLists.txt` 显式设 `CMAKE_LIBRARY_OUTPUT_DIRECTORY` → `<module>/libs/${OHOS_ARCH}`；HAR 实测含 `package/libs/arm64-v8a/libnode_bridge.so`（14,208 B，**为 Phase 0 骨架构建产物**）✅ |
 | **S7** 引导件不链接 libnode | ✅ **符合** | `CMakeLists.txt` 的 `target_link_libraries(node_bridge PUBLIC libace_napi.z.so libhilog_ndk.z.so)`（Phase 1 另加 `_GNU_SOURCE` 定义与 `CMAKE_C_EXTENSIONS ON`） |
 | **S8** C 侧接口保持极窄（初版 3 个） | ✅ **符合（已按扩展口径执行）** | `Init()` 现注册 **5 个**：`start`/`isRunning`/`version`/`lastError`/`stage`；`index.d.ts` **已同步**（含 `start()` 第 6 参 `envPairs`）⇒ 满足「扩展必须同时改 `.d.ts`」 |
 | **S9** 日志双通道；文件读取失败返回占位串不抛 | ⚠️ **部分符合** | C 侧已升级为 `write_line()`/`raw_write_fd()`：**hilog + 单次 `write()` 到常开日志 fd**（`O_APPEND`，行格式 `<stream> <epochMs> <text>`），由独立 reader 线程持续排空 ✅；ArkTS `Logger.tail` 失败返回 `'(read log failed: …)'` ✅（`Logger.ets:49-51`）。**缺口**：ArkTS 侧 `Logger.info/warn/error` **只进 hilog、不落盘** |
 | **S10** 二进制不入库 | ✅ **符合** | `.gitignore:19-24`（`**/libnode.so`、`**/libc++_shared.so`、`library/libs/`、`library/src/main/libs/`、`*.har`）；`library/.ohpmignore:11`；`git ls-files` 无任何 `.so` ✅ |
 
-**结论**：**0 条严重违背原则（C1–C7 无 ❌）· 0 条规约明确违背（S5 由 ❌ 转为 ⚠️ 待宪法侧确认口径）· 8 条规约部分符合（S1/S2/S3 完全符合已计在内，此处指 S4/S5/S9 等仍在收敛中）**。合规检查的完整待办清单见 §3.5。
+**结论**：**0 条严重违背原则（C1–C7 无 ❌）· 0 条规约明确违背（S5 已由 ⚠️ 转 ✅）· 少量规约仍在收敛（如 S4 的 `cwd` 选项、S9 的 ArkTS 侧落盘）**。合规检查的完整待办清单见 §3.5。
 
 ---
 
@@ -106,12 +106,12 @@
 
 | # | 缺陷 | 文件:行 | 修法 |
 |---|---|---|---|
-| 1 | S5 口径复核：崩溃 handler 内使用**栈上 `snprintf`**（+ 自实现 `u64_to_dec()` 异步信号安全十进制输出），已无 `vsnprintf` 入日志路径 | `crash_handler()` / `u64_to_dec()` | 宪法 S5 字面为「只允许裸 `open`/`write`/`close`」⇒ 需宪法侧确认「栈上 snprintf、无锁无分配」是否可接受；不可接受则改为纯手写转换 |
-| 2 | C1 越界：`PI_WEB_ENTRY` | `payload/bootstrap.js:43,49,52` | 改通用变量名（如 `NODE_BRIDGE_ENTRY`），应用语义由 `env` 传入 |
+| 1 | ✅ **已修（2026-10-17）**：S5 口径复核 —— 崩溃 handler 曾用**栈上 `snprintf`** | `crash_handler()` / `u64_to_dec()` / `u64_to_hex()` | 已改为纯手写转换（十进制 + 十六进制） + `lb_append*` + 单次 `write()`；handler 区间 0 命中 stdio/malloc/getenv |
+| 2 | ✅ **已修（2026-10-17）**：C1 越界 `PI_WEB_ENTRY` | `payload/bootstrap.js` | 兼容别名已删除；入口只认 `NODE_BRIDGE_ENTRY`，应用语义由 `env` 传入（C1 / FR-004-020） |
 | 3 | ⑱ 不符合：只有顶层 `try/catch` | `payload/bootstrap.js:59-64` | 增加 `process.on('uncaughtException'/'unhandledRejection')` + 独立日志通道 |
-| 4 | C2 缺口（剩余部分）：C 侧已加 `stage()`/`lastError()` 探针 ✅，但 **ArkTS 侧尚未把两者接入状态机**（`NodeRuntime` 未调用 ⇒ `STARTING` 仍可能永久滞留） | `NodeRuntime.ets` + `js_start()`/`js_last_error()`/`js_stage()` | ArkTS 侧在 `STARTING` 超时后读 `lastError()`/`stage()` 并 `markFailed` |
-| 5 | 默认 `flags` 与规划不一致 | `NodeRuntime.ets:76`、`js_start()` 的空值兜底 | 统一为 `--expose-internals --no-verify-heap`（硬约束 ⑤） |
-| 6 | 体积前提缺失：压缩开关未落 | `library/src/main/module.json5` | 在 **module 级**加 `compressNativeLibs` + `extractNativeLibs` |
+| 4 | ✅ **已修（2026-10-17）**：C2 缺口 —— C 侧 `stage()`/`lastError()` 探针已接入状态机 | `NodeRuntime.ets` | `getStage()`/`getLastError()` 可读，原生错误非空即置 `failed`（并写 `node.log`）；不再依赖探活超时 |
+| 5 | ✅ **已定案（2026-10-17，文档化偏差）**：默认 `flags` = `--no-verify-heap`（真机验证值、最小可用集） | `NodeRuntime.ets`、`js_start()` 的空值兜底 | `--expose-internals` **仅当载荷走 internal-module stub 路线**时必需，由消费方经 `flags`/`execArgv` 显式传入；规划 §5.3 草案默认值被取代（B5/R2） |
+| 6 | ✅ **已在消费方落地（2026-10-17，B4/R2）**：压缩开关 | 消费方 `pi-desktop-ark/entry/src/main/module.json5`（module 级 `compressNativeLibs: true` + `extractNativeLibs: true`）；库自身 `library/src/main/module.json5` 不声明（HAR 不产 HAP，由消费方模块决定） | 实测（2026-10-17）：签名 HAP **46,031,244 B**，三个 `.so` 全部 `compress_type=8`（DEFLATE；此前 129,535,202 B / 全 0） |
 | 7 | 版本下限无 warn | `NodeRuntime.ets` / 原生层 | 启动后校验 `process.version >= 22.19.0` 并可见告警 |
 | 8 | C5 缺口：失败原因不结构化 | `NodeRuntime.ets:108-114` | `FailedDetail{stage, signal?, rawError?}` |
 | 9 | 工作区把签名材料写进受版本控制的构建配置 | 根 `build-profile.json5:5-19` | 还原为 `signingConfigs: []`，改用 `signing.<mode>.local.json`（`hvigorfile.ts` 已支持） |
@@ -166,7 +166,7 @@
 
 | 通道 | 写方 | 读方 | 现状 |
 |---|---|---|---|
-| hilog（DOMAIN `0xD0033` / TAG `NODE_BRIDGE`；C 侧 `0xD003300`） | ArkTS `Logger` + C `log_line` | `hdc shell hilog`（级别需能进 dump 缓冲） | ✅ |
+| hilog（DOMAIN `0xD0033` / TAG `NODE_BRIDGE`；**C 侧同为 `0xD0033`**，A1/R2） | ArkTS `Logger` + C `log_line` | `hdc shell hilog`（级别需能进 dump 缓冲） | ✅ |
 | 文件日志 `<filesDir>/payload/node.log` | C 侧 `raw_write`（信号安全）+ stdio `dup2` | ArkTS `Logger.tail()`、自检 `/log` | ✅ ⚠️ 会混入 ArkWeb 原生输出（⑱） |
 | 有界日志环（默认 500 行） | ArkTS（规划） | `logs()` → 界面诊断面板 | ⬜ Phase 1 |
 | 崩溃记录 `last-crash.json` | 原生 handler（规划） | `lastCrash()` | ⬜ Phase 1 |
@@ -193,7 +193,7 @@
 |---|---|
 | 内核级证据 | 6 类信号 handler；日志内 `CRASH sig=… si_addr=… pc=… lr=… sp=… r0=…` **且** 写 `<HOME>/node-bridge/last-crash.json`（`{at,stage,signal,hint}`）✅（`crash_handler()`） |
 | 系统侧证据 | `hdc shell hilog -x \| grep -E "node-bridge\|Cpp Crash"`；进程内 Node 崩溃系统会判 `Cpp Crash` 杀进程 ✅（§D.8 ①） |
-| 结构化记录 | ⚠️ 一半：**C 侧已写** `<HOME>/node-bridge/last-crash.json`（`{at,stage,signal,hint}`）✅；**ArkTS 侧 `lastCrash()` 读取接口 ⬜ 未实现** |
+| 结构化记录 | ✅ 两侧齐备：**C 侧写** `<HOME>/node-bridge/last-crash.json`（`{at,stage,signal,hint}`）✅；**ArkTS 侧 `lastCrash()` 读取接口已实现**（含 JSON 损坏时从日志尾 `CRASH` 行降级重建，`NodeRuntime.ets`）✅ |
 | 符号 | release **保留 native 符号**（`nativeLib.debugSymbol.strip=false`，规划 §5.10 ⑬）⬜ 待确认工程配置 |
 | UX 契约 | 崩溃是终态 ⇒ 只允许「读日志 / 读崩溃记录 / 提示重启应用」（C5） |
 | 已知最易混淆的一条 | 端口冲突导致的载荷未捕获异常会让**整个 App 进程** abort（崩溃栈含引导件）⇒ 必须靠 ⑰⑱ 预防，而不是靠崩溃取证事后追（§D.10） |
