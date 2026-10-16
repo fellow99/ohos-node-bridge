@@ -103,18 +103,34 @@ getNode(__filename).afterNodeEvaluate((node) => {
   const products = buildProfileOpt['app']['products'];
 
   if (!material) {
-    // 无签名材料：摘掉 product 上的 signingConfig 指向，产出未签名包（不报错）。
-    if (Array.isArray(products)) {
-      for (const p of products) {
-        delete p['signingConfig'];
+    // 没有本地签名材料（signing.<mode>.local.json / 环境变量）时**不改动任何东西**：
+    // DevEco 的「自动生成签名」就是把 signingConfigs 直接写进 build-profile.json5。
+    // （早期实现会在这里删掉 product 的 signingConfig —— 那会让构建**静默产出未签名包**。）
+    const inline = buildProfileOpt['app']['signingConfigs'];
+    const inlineCount = Array.isArray(inline) ? inline.length : 0;
+    if (inlineCount === 0) {
+      console.warn(
+        `[hvigorfile] SIGN_MODE=${mode}：既没有 ${path.join(PROJECT_ROOT, `signing.${mode}.local.json`)}（与环境变量），` +
+        `build-profile.json5 里也没有 signingConfigs —— 本次构建**产出未签名包**。` +
+        `（在 DevEco 里「自动生成签名」，或填写 signing.${mode}.local.json）`
+      );
+    } else {
+      // DevEco 只写了 signingConfigs、没把 product 指过去时**补上指针**：
+      // 只有 signingConfigs 而没有 products[].signingConfig，构建仍然产出未签名包。
+      const firstName = typeof inline[0].name === 'string' ? inline[0].name : 'default';
+      if (Array.isArray(products)) {
+        for (const p of products) {
+          if (p['signingConfig'] === undefined) {
+            p['signingConfig'] = firstName;
+          }
+        }
       }
+      appContext.setBuildProfileOpt(buildProfileOpt);
+      console.log(
+        `[hvigorfile] 使用 build-profile.json5 里的签名配置（${inlineCount} 条，由 DevEco 写入；product → ${firstName}）；` +
+        `如需覆盖请提供 signing.${mode}.local.json。`
+      );
     }
-    appContext.setBuildProfileOpt(buildProfileOpt);
-    console.warn(
-      `[hvigorfile] SIGN_MODE=${mode}，未找到签名材料：` +
-      `${path.join(PROJECT_ROOT, `signing.${mode}.local.json`)}（也未提供 CERTPATH/STORE_FILE/STORE_PASSWORD/KEY_PASSWORD 环境变量）。` +
-      `本次构建**产出未签名包**。`
-    );
     return;
   }
 
