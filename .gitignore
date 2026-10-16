@@ -23,3 +23,6 @@ signing.*.local.json
 library/libs/
 library/src/main/libs/
 *.har
+
+# hvigor 生成的构建期常量（每次构建重写，不入库）
+/**/BuildProfile.ets
