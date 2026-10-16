@@ -81,9 +81,15 @@ export class Env {
     destPath: string
   ): string {
     const data: Uint8Array = mgr.getRawFileContentSync(rawName);
+    // A5：`getRawFileContentSync` 的返回值是**视图**，可能带非零 `byteOffset` 或短于其 backing buffer。
+    // 直接写 `data.buffer` 会把视图之外的字节一起落盘（载荷尾部多出垃圾 → 解包/执行结果不可信）。
+    // 只写视图覆盖的字节：常见情形（offset=0 且长度相等）零拷贝，否则先 slice 出精确副本。
+    const body: Uint8Array = (data.byteOffset === 0 && data.byteLength === data.buffer.byteLength)
+      ? data
+      : data.slice(data.byteOffset, data.byteOffset + data.byteLength);
     const file = fs.openSync(destPath, fs.OpenMode.CREATE | fs.OpenMode.READ_WRITE | fs.OpenMode.TRUNC);
     try {
-      fs.writeSync(file.fd, data.buffer as ArrayBuffer);
+      fs.writeSync(file.fd, body.buffer as ArrayBuffer);
     } finally {
       fs.closeSync(file);
     }

@@ -48,6 +48,18 @@ const QUIET = flag('quiet');
 const log = (...a) => { if (!QUIET) console.log(...a); };
 const fail = (msg) => { console.error(`\n✗ ${msg}`); process.exit(2); };
 
+/** 联网失败时的代理提示：Node 内置 fetch 默认**不读**代理环境变量（NODE_USE_ENV_PROXY=1 才读） */
+function proxyHint() {
+  const px = process.env.https_proxy || process.env.HTTPS_PROXY ||
+    process.env.http_proxy || process.env.HTTP_PROXY;
+  if (!px) return '';
+  return process.env.NODE_USE_ENV_PROXY
+    ? `\n（NODE_USE_ENV_PROXY 已开启，走代理 ${px}）`
+    : `\n提示：检测到代理 ${px}，但 Node 内置 fetch 默认**不读**代理环境变量。\n` +
+      `     请加 NODE_USE_ENV_PROXY=1 重试（Node ≥ 24）：\n` +
+      `       HTTPS_PROXY=${px} NODE_USE_ENV_PROXY=1 node tools/provision.mjs --download --out <dir>`;
+}
+
 // ------------------------------------------------------------- 读 lock ----
 if (!existsSync(LOCK_PATH)) fail(`找不到 ${LOCK_PATH}`);
 let lock;
@@ -231,7 +243,17 @@ async function main() {
   log(`  本地运行时目录 = ${localStoreAbs}${ENV_DIR ? '  (来自环境变量)' : ''}`);
 
   // 1) 找源：本地目录 → 显式 --from → （--download 时）镜像 → 上游
+  // A3：`--from` 接受 URL（头部用法声明 `<path|url>`）—— URL 必须走与 --download
+  // 同一条 acquire()/fetch 路径；否则会被当本地路径 statSync ⇒ `ENOENT … stat '…https:…'` 栈。
   let srcPath = opt('from');
+  if (srcPath && /^https?:\/\//.test(srcPath)) {
+    const url = srcPath;
+    try {
+      srcPath = (await acquire(url)).path;
+    } catch (e) {
+      fail(`--from 的 URL 下载失败：${url} → ${e.message}${proxyHint()}`);
+    }
+  }
   if (!srcPath) {
     srcPath = localCandidates.find((p) => existsSync(p));
   }
@@ -244,15 +266,7 @@ async function main() {
       catch (e) { errs.push(`${u} → ${e.message}`); log(`  ! ${e.message}，尝试下一个来源`); }
     }
     if (!srcPath) {
-      const px = process.env.https_proxy || process.env.HTTPS_PROXY ||
-        process.env.http_proxy || process.env.HTTP_PROXY;
-      const hint = !px ? ''
-        : process.env.NODE_USE_ENV_PROXY
-          ? `\n（NODE_USE_ENV_PROXY 已开启，走代理 ${px}）`
-          : `\n提示：检测到代理 ${px}，但 Node 内置 fetch 默认**不读**代理环境变量。\n` +
-            `     请加 NODE_USE_ENV_PROXY=1 重试（Node ≥ 24）：\n` +
-            `       HTTPS_PROXY=${px} NODE_USE_ENV_PROXY=1 node tools/provision.mjs --download --out <dir>`;
-      fail(`全部下载来源均失败：\n  - ${errs.join('\n  - ')}${hint}`);
+      fail(`全部下载来源均失败：\n  - ${errs.join('\n  - ')}${proxyHint()}`);
     }
   }
   if (!srcPath) {
@@ -266,9 +280,18 @@ async function main() {
   }
 
   // 2) 校验
-  const st = statSync(srcPath);
-  const sha = sha256File(srcPath);
-  const gate = elfGate(readFileSync(srcPath), entry);
+  // A4：读/解析失败必须是**一行 ✗ + 退出码 2**，不能把栈糊给用户：
+  // 目录 ⇒ EISDIR；截断/畸形 ELF ⇒ 自解析器 readBigUInt64LE 抛 RangeError[ERR_OUT_OF_RANGE]。
+  // fail() 内部 process.exit(2)，故 catch 后不会继续（gate 一定已赋值）。
+  let st, sha, gate;
+  try {
+    st = statSync(srcPath);
+    if (!st.isFile()) throw new Error('不是普通文件（目录？）');
+    sha = sha256File(srcPath);
+    gate = elfGate(readFileSync(srcPath), entry);
+  } catch (e) {
+    fail(`无法读取/解析 ELF：${srcPath} —— ${e.message}`);
+  }
   if (gate.error) fail(`不是可用的 ELF：${gate.error}`);
   const shaOk = sha === entry.sha256;
   const sizeOk = st.size === entry.size;
@@ -289,9 +312,15 @@ async function main() {
 
   const deployName = entry.deployAs ?? 'libnode.so';
   const outSo = join(outAbs, deployName);
-  if (existsSync(outSo) && !flag('force') && sha256File(outSo) === sha) {
+  // A6：目标存在但 SHA 与 lock 不符 ⇒ 这是**覆盖**。契约要求目标必须等于 lock 值（不是拒绝），
+  // 但必须把「换掉了什么」说出来，否则本地改动/签名的痕迹会被静默抹掉（C2 可追溯）。
+  const prevSha = existsSync(outSo) ? sha256File(outSo) : null;
+  if (prevSha === sha && !flag('force')) {
     log(`\n= 已是最新（${deployName} 的 SHA-256 命中）→ 跳过拷贝`);
   } else {
+    if (prevSha !== null && prevSha !== sha) {
+      log(`  ⟳ 覆盖 ${deployName}：旧 SHA-256 ${prevSha.slice(0, 16)}… → 新 ${sha.slice(0, 16)}…`);
+    }
     copyFileSync(srcPath, outSo);
     log(`\n+ 投放 ${deployName} → ${outSo}  (${(st.size / 1048576).toFixed(1)} MiB)`);
   }
@@ -304,9 +333,14 @@ async function main() {
   }
   const outCxx = join(outAbs, lock.libcxx.file);
   const cxxSha = sha256File(libcxxSrc);
-  if (existsSync(outCxx) && !flag('force') && sha256File(outCxx) === cxxSha) {
+  // A6：同 libnode.so —— 覆盖既有 libc++_shared.so 时也要说明旧/新 SHA-256（可追溯）
+  const prevCxxSha = existsSync(outCxx) ? sha256File(outCxx) : null;
+  if (prevCxxSha === cxxSha && !flag('force')) {
     log('= libc++_shared.so 已是最新（SHA-256 命中）→ 跳过拷贝');
   } else {
+    if (prevCxxSha !== null && prevCxxSha !== cxxSha) {
+      log(`  ⟳ 覆盖 libc++_shared.so：旧 SHA-256 ${prevCxxSha.slice(0, 16)}… → 新 ${cxxSha.slice(0, 16)}…`);
+    }
     copyFileSync(libcxxSrc, outCxx);
     log(`+ 投放 libc++_shared.so（自 SDK）→ ${outCxx}  (${(statSync(libcxxSrc).size / 1048576).toFixed(1)} MiB)`);
   }

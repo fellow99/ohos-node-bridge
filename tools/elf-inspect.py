@@ -10,6 +10,9 @@
   6) SHA-256
 
 用法：python elf-inspect.py <file.so>
+
+退出码：0 = VERDICT PASS；2 = VERDICT FAIL（含非 ELF / 32 位 / 任一门禁不过）。
+CI 必须以退出码为判据（stdout 文本仅供人读与既有工具解析）。
 """
 import hashlib
 import struct
@@ -162,8 +165,16 @@ def main(path: str) -> int:
     if not dynsym_exported:
         verdict.append("node::Start not exported")
     print("VERDICT         : " + ("PASS (可 dlopen 的真共享库)" if not verdict else "FAIL -> " + "; ".join(verdict)))
-    return 0
+    # 退出码即判据：FAIL 必须让 CI 变红（此前恒返回 0 ⇒ PIE/坏产物也「假绿」）。
+    # 保持 stdout 文本原样 —— tools/smoke-host.mjs 与既有归档解析它。
+    return 0 if not verdict else 2
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1]))
+    try:
+        sys.exit(main(sys.argv[1]))
+    except Exception as exc:  # 截断/畸形 ELF、目录等：一行友好错误 + 退出码 2，不留栈
+        # 自解析器对短文件会在 unpack / seg 切片处抛异常；对使用者而言这就是「不是合格产物」。
+        target = sys.argv[1] if len(sys.argv) > 1 else "<missing arg>"
+        print(f"✗ {target} —— 无法解析为 64 位 ELF（{type(exc).__name__}: {exc}）")
+        sys.exit(2)

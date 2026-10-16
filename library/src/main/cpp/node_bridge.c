@@ -39,7 +39,11 @@
 
 #undef LOG_DOMAIN
 #undef LOG_TAG
-#define LOG_DOMAIN 0xD003300
+/* hilog domain：**必须**与 ArkTS 侧 library/src/main/ets/log/Logger.ets 的 DOMAIN 完全相同
+ * （同为 0xD0033；消费方 pi-desktop-ark 的 common/Constants.ets 也用它）。
+ * 差一位就导致一条 `hilog -D 0xD0033` / grep 过滤只能捕到一半日志（原生行或 ArkTS 行），
+ * 与 C6「诊断优先」直接相抵 —— 改这里必须同步改 Logger.ets。 */
+#define LOG_DOMAIN 0xD0033
 #define LOG_TAG "NODE_BRIDGE"
 
 #define MAX_ARGS 12

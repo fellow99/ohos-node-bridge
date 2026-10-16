@@ -2,6 +2,10 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { buffer } from '@kit.ArkTS';
 
+/** hilog domain：**必须**与 C 侧 library/src/main/cpp/node_bridge.c 的 LOG_DOMAIN 完全相同
+ * （同为 0xD0033；消费方 pi-desktop-ark 的 common/Constants.ets 也用它）。
+ * 差一位就导致一条 `hilog -D 0xD0033` / grep 过滤只捕到一半日志（原生行或 ArkTS 行）——
+ * 改这里必须同步改 node_bridge.c。 */
 const DOMAIN = 0xD0033;
 
 /** 默认读尾字节数（规划 §5.7：`/log` 返回日志尾 8192 字节） */
