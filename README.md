@@ -1,1 +1,1 @@
-# hos-node-bridge
+# ohos-node-bridge
