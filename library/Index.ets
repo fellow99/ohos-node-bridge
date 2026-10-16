@@ -12,10 +12,13 @@
  *   src/main/ets/bridge   → 003-host-bridge（Node ↔ ArkTS 双向调用）
  *   src/main/ets/log      → 006-observability（日志环 + hilog + 崩溃记录）
  *   src/main/ets/util     → 006-observability（路径 / 环境变量装配）
+ *
+ * 导出面**冻结**在契约 §2.1：新增公共 API 必须同时改本文件与 `runtime/Types.ets`（宪法 S2）。
  */
 export { NodeRuntime } from './src/main/ets/runtime/NodeRuntime';
 export { NodeState } from './src/main/ets/runtime/Types';
-export { NodeRuntimeOptions, NodeStartResult, HostBridgeHandler } from './src/main/ets/runtime/Types';
+export { NodeRuntimeOptions, NodeStartResult, NodeLogEntry, CrashRecord, HostBridgeHandler }
+  from './src/main/ets/runtime/Types';
 export { HostBridge } from './src/main/ets/bridge/HostBridge';
 export { Logger } from './src/main/ets/log/Logger';
 export { Env } from './src/main/ets/util/Env';

@@ -7,8 +7,10 @@ import { resourceManager } from '@kit.LocalizationKit';
  *
  * 约定（依据工程规划 §5.6 环境契约 + §D.8 真机偏差）：
  * - `HOME` / `USERPROFILE` / `TMPDIR` / `TMP` / `TEMP` 全部由原生层指向**应用沙箱**；
- * - `process.cwd()` 在真机上是 `/` ⇒ **所有路径都必须是绝对路径**，不要依赖 cwd；
+ * - `process.cwd()` 在真机上是 `/` ⇒ **所有路径都必须是绝对路径**，不要依赖 cwd（S4）；
  * - Node 侧只写它自己的沙箱目录（「谁写谁读」，notes 硬约束 ④）。
+ *
+ * 路径取值冻结在契约 §2.8；新增字段必须同步 `Index.ets` / `Types.ets`（S2）。
  */
 export class Env {
   /** payload（入口脚本 + 日志）目录 */
@@ -26,6 +28,30 @@ export class Env {
     return Env.payloadDir(context) + '/node.log';
   }
 
+  /**
+   * 库自己的沙箱目录：崩溃记录等**非载荷**文件放这里，与 Node 的可写运行目录（`payload/`）分开
+   * —— 载荷目录可能被整份替换/清理，取证文件不该跟着消失（规划 §5.1 分层图）。
+   */
+  static bridgeDir(context: common.Context): string {
+    return context.filesDir + '/node-bridge';
+  }
+
+  /** 崩溃记录：原生崩溃 handler 覆盖写、`NodeRuntime.lastCrash()` 读（契约 §1.4 / §5.7） */
+  static crashPath(context: common.Context): string {
+    return Env.bridgeDir(context) + '/last-crash.json';
+  }
+
+  /**
+   * `resfile` **只读直读**根（零解压首选路线，规划 §5.5）。
+   *
+   * ⚠️ 平台真相（C2）：不是所有 `Context` 都带 `resourceDir`（例如某些窗口/应用级 Context 可能为空串）。
+   * 空串时**原样返回 `''`**，绝不在这里编造一个路径 —— 消费方/Node 侧必须按「未提供只读根」处理，
+   * 而不是去读一个不存在的目录后报 `ENOENT` 却不知道为什么。
+   */
+  static readonlyRoot(context: common.Context): string {
+    return context.resourceDir;
+  }
+
   /** 幂等建目录（已存在即忽略；不做递归创建，父目录是 filesDir） */
   static ensureDir(path: string): void {
     try {
@@ -35,10 +61,11 @@ export class Env {
     }
   }
 
-  /** 建齐运行期目录（payload/ 与 tmp/） */
+  /** 建齐运行期目录（`payload/` + `tmp/` + `node-bridge/`）；调用时机：投递启动**之前**（FR-001-016） */
   static ensureRuntimeDirs(context: common.Context): void {
     Env.ensureDir(Env.payloadDir(context));
     Env.ensureDir(Env.tmpDir(context));
+    Env.ensureDir(Env.bridgeDir(context));
   }
 
   /**
