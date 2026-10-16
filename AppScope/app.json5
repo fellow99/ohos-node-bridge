@@ -1,0 +1,14 @@
+{
+  "app": {
+    // 仅用于本仓库自测 / 样例 HAP；**库（HAR）本身不带 bundleName**，
+    // 消费方（如 pi-desktop-ark）用自己的包名。
+    "bundleName": "org.fellow99.nodebridge.sample",
+    "vendor": "fellow99",
+    "versionCode": 100,
+    "versionName": "0.1.0",
+    "icon": "$media:app_icon",
+    "label": "$string:app_name",
+    "minAPIVersion": 17,
+    "targetAPIVersion": 24
+  }
+}

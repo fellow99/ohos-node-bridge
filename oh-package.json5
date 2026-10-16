@@ -1,0 +1,8 @@
+{
+  "modelVersion": "6.1.1",
+  "description": "ohos-node-bridge —— 应用进程内嵌 Node.js 运行时（ArkTS 组件库 + NAPI 引导件）",
+  // 刻意留空：本工程的编译验证不依赖任何远端包（离线可构建）。
+  // 需要测试框架时再加 "@ohos/hypium" 等，并确保 CI 能访问 ohpm 源。
+  "dependencies": {},
+  "devDependencies": {}
+}

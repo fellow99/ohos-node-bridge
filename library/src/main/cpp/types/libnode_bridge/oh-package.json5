@@ -1,0 +1,6 @@
+{
+  "name": "libnode_bridge.so",
+  "types": "./index.d.ts",
+  "version": "0.1.0",
+  "description": "ohos-node-bridge 的 NAPI 引导件类型声明"
+}

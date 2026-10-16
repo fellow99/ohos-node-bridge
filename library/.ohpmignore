@@ -1,0 +1,17 @@
+# 发布到 ohpm 时**排除**的内容（相对 library/）
+#
+# 依据：工程规划 §7.5 / 附录 G.8 —— HAR **不带 libnode.so**（约 121 MB），
+# 运行时由消费方构建时用 tools/provision.mjs 投放（它会连 libc++_shared.so 一起投放）。
+#
+# ⚠️ 两条注意：
+#   1. 引导件 `libnode_bridge.so`（约 14 KB）与 `libc++_shared.so` 是**要随包分发**的；
+#      它们由 hvigor 的 CMake/ProcessLibs 流程产出，本文件不排它们。
+#   2. 推荐发布方式是「先 `assembleHar`，再 `ohpm publish <产出的 .har>`」——
+#      直接对**源码目录**执行 publish 会因缺少构建产物而不完整（且本文件只做兜底保护）。
+**/libnode.so
+build/
+.hvigor/
+.cxx/
+oh_modules/
+node_modules/
+*.har

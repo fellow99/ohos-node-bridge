@@ -1,0 +1,24 @@
+{
+  "module": {
+    "name": "library",
+    "type": "har",
+    "deviceTypes": [
+      "2in1",
+      "tablet"
+    ],
+    // 刻意不写 description：HAR 的资源与消费方资源会合并，写 $string:... 会引入
+    // 「资源名重名」告警（module_desc / node_bridge_module_desc 都会撞）。
+    // HAR 的用途说明放在 library/README.md 与 oh-package.json5 的 description 里。
+    "requestPermissions": [
+      // 库自身只声明它**确实需要**的系统权限（INTERNET：Node 侧起 HTTP 服务 / loopback 通信）。
+      // 受限 ACL（如 ohos.permission.kernel.ALLOW_WRITABLE_CODE_MEMORY，JIT 必需）由**消费方**
+      // 按自己的包名申请并在自己的 module.json5 里声明 —— 见工程规划 §7.5 与附录 F。
+      {
+        "name": "ohos.permission.INTERNET"
+      },
+      {
+        "name": "ohos.permission.GET_NETWORK_INFO"
+      }
+    ]
+  }
+}

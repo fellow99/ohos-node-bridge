@@ -1,0 +1,16 @@
+{
+  "name": "@fellow99/node-bridge",
+  "version": "0.1.0",
+  "description": "在应用进程内嵌入真正的 Node.js 运行时（NAPI 引导 + dlopen + node::Start），供 ArkTS/ArkWeb 应用调用",
+  "main": "Index.ets",
+  "author": "fellow99",
+  "license": "MIT",
+  "keywords": [
+    "nodejs",
+    "harmonyos",
+    "ohos",
+    "napi",
+    "runtime"
+  ],
+  "dependencies": {}
+}
