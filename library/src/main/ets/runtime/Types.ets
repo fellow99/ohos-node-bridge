@@ -156,4 +156,14 @@ export interface CrashRecord {
 }
 
 /** 宿主能力桥的处理器（003）：入参与返回值都是 **JSON 字符串**（不受参数个数与类型限制，规划 §5.3） */
-export type HostBridgeHandler = (argsJson: string) => string;
+/**
+ * 宿主能力桥的处理器（003）：入参与返回值都是 **JSON 字符串**（不受参数个数与类型限制，规划 §5.3）。
+ *
+ * **允许返回 Promise**（2026-10-17，E17/E20/E21）：这类能力天然异步 ——
+ * `requestPermissionsFromUser`（弹授权窗）、`picker.select`（等用户选目录）、
+ * `notificationManager.publish` 都是 Promise。两条传输的处置不同：
+ *   · **文件信箱**（`mailboxTick`）走 `dispatchAsync`，会 await 它；
+ *   · **原生槽位表**（`pumpTick`）是同步的，拿到 Promise 只能如实报错
+ *     （`async-handler-on-sync-path`），绝不返回未决结果。
+ */
+export type HostBridgeHandler = (argsJson: string) => string | Promise<string>;

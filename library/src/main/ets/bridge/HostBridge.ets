@@ -294,6 +294,14 @@ export class HostBridge {
    */
   private mailboxTick(): void {
     this.mailboxRounds = this.mailboxRounds + 1;
+    /*
+     * 串行保证（E17/E20/E21 起必需）：异步能力的处理会横跨多个 tick，
+     * 期间 `mailboxInflight` 非空 —— 必须早退，否则下一轮会**再取一个**请求，
+     * 两个 `.wip` 同时在飞，串行语义（以及"在飞豁免回收"的判据）全部失效。
+     */
+    if (this.mailboxInflight.length > 0) {
+      return;
+    }
     const dir: string = this.mailboxDir;
     if (dir.length === 0) {
       return;
@@ -363,11 +371,30 @@ export class HostBridge {
       return;
     }
     this.mailboxHeartbeat('got id=' + id + ' name=' + reqName + ' bytes=' + payload.length);
-    const result: string = this.dispatch(reqName, reqArgs);
     /*
-     * 成功/失败都由 `dispatch()` 的 JSON 决定（`ok === false` 即失败）：
-     * 宿主侧只做字节搬运，不重复解释 —— 一处口径，两侧不会漂。
+     * 走**异步分发**（E17/E20/E21）：弹授权窗、选目录、发通知都是 Promise，
+     * 而 `mailboxTick` 每 100 ms 被调一次 —— 不能在定时器回调里 await。
+     * 做法：把「写结果 + 收尾」抽成 `mailboxSettle`，由 Promise 的 then 调它；
+     * 在这期间 `mailboxInflight` 非空，下一轮 tick 直接早退（串行保证）。
      */
+    this.dispatchAsync(reqName, reqArgs).then((result: string): void => {
+      this.mailboxSettle(dir, id, result);
+    }, (e: Object): void => {
+      // dispatchAsync 契约上永不 reject；真 reject 了也必须回填，否则 Node 只能等超时
+      this.mailboxErrors = this.mailboxErrors + 1;
+      const body: string = '{"ok":false,"error":"host-dispatch-rejected","name":"'
+        + HostBridge.jsonEsc(reqName) + '","detail":"' + HostBridge.jsonEsc(Logger.describeThrown(e)) + '"}';
+      this.mailboxSettle(dir, id, body);
+    });
+  }
+
+  /**
+   * 把一次分发的结果写回信箱并收尾（同步/异步两条路共用）。
+   *
+   * 成功/失败都由结果的 JSON 决定（`ok === false` 即失败）：宿主侧只做字节搬运，
+   * 不重复解释 —— 一处口径，两侧不会漂。
+   */
+  private mailboxSettle(dir: string, id: string, result: string): void {
     const ok: boolean = !HostBridge.isFailureJson(result);
     const writeOk: boolean = ok
       ? this.mailboxWrite(dir, id, MAILBOX_DONE, '{"ok":true,"result":"' + HostBridge.jsonEsc(result) + '"}')
@@ -596,21 +623,76 @@ export class HostBridge {
   dispatch(name: string, argsJson: string): string {
     this.invocations = this.invocations + 1;
     const safeName: string = typeof name === 'string' ? name : '';
-    if (safeName.length === 0) {
+    const rejection: string = this.precheck(safeName, argsJson);
+    if (rejection.length > 0) {
       this.errors = this.errors + 1;
-      return '{"ok":false,"error":"bad-args","name":"' + HostBridge.jsonEsc(safeName) + '"}';
+      return rejection;
     }
-    if (typeof argsJson !== 'string') {
-      this.errors = this.errors + 1;
-      return '{"ok":false,"error":"bad-args","name":"' + HostBridge.jsonEsc(safeName) + '"}';
+    const h: HostBridgeHandler = this.handlers.get(safeName) as HostBridgeHandler;
+    try {
+      const out: string | Promise<string> = h(argsJson);
+      /*
+       * 异步处理器**不能**走同步路径：原生槽位表（`pumpTick`）在拿回填值时必须立刻返回，
+       * 而 Promise 此刻还没有结果。如实报错好过返回未决值 —— 后者会让 Node 侧拿到
+       * 一个空串/半截 JSON，看起来像"宿主返回了空"（正是 C2 禁止的那类静默失败）。
+       * 需要异步能力的调用方走文件信箱（`dispatchAsync`）。
+       */
+      if (out instanceof Promise) {
+        this.errors = this.errors + 1;
+        return '{"ok":false,"error":"async-handler-on-sync-path","name":"'
+          + HostBridge.jsonEsc(safeName)
+          + '","hint":"该能力是异步的（弹窗/选择器/通知），请经文件信箱调用"}';
+      }
+      return out;
+    } catch (e) {
+      return this.threwBody(safeName, e);
     }
+  }
 
-    const h: HostBridgeHandler | undefined = this.handlers.get(safeName);
-    if (h === undefined) {
+  /**
+   * 异步分发（2026-10-17，E17/E20/E21）：与 `dispatch` **同一套校验口径**，只把
+   * "调用处理器"这一步换成 await。
+   *
+   * 为什么必须共用 `precheck`：校验顺序与错误码是**跨传输的契约**
+   * （`bad-args` → `unregistered` → `payload-too-large`）；两条路径各写一份，
+   * 迟早出现"同一个调用在信箱上成功、在原生上被拒"。
+   *
+   * **永不抛**：任何异常都转成结构化 JSON（否则 `mailboxTick` 只能等超时）。
+   */
+  async dispatchAsync(name: string, argsJson: string): Promise<string> {
+    this.invocations = this.invocations + 1;
+    const safeName: string = typeof name === 'string' ? name : '';
+    const rejection: string = this.precheck(safeName, argsJson);
+    if (rejection.length > 0) {
       this.errors = this.errors + 1;
+      return rejection;
+    }
+    const h: HostBridgeHandler = this.handlers.get(safeName) as HostBridgeHandler;
+    try {
+      const out: string | Promise<string> = h(argsJson);
+      if (out instanceof Promise) {
+        return await out as string;
+      }
+      return out;
+    } catch (e) {
+      return this.threwBody(safeName, e);
+    }
+  }
+
+  /**
+   * 前置校验（**两条传输共用**）。返回空串 = 通过；否则是可直接回给调用方的结构化错误。
+   *
+   * 判定顺序（先便宜后昂贵，且**未注册优先于超限**：名字都不认识时不必先算长度）：
+   * `bad-args` → `unregistered` → `payload-too-large`。计数由调用方做（两处各加一次，
+   * 不能在 helper 里加 —— 否则 `dispatch` 会把错误计两遍）。
+   */
+  private precheck(safeName: string, argsJson: string): string {
+    if (safeName.length === 0 || typeof argsJson !== 'string') {
+      return '{"ok":false,"error":"bad-args","name":"' + HostBridge.jsonEsc(safeName) + '"}';
+    }
+    if (!this.handlers.has(safeName)) {
       return '{"ok":false,"error":"unregistered","name":"' + HostBridge.jsonEsc(safeName) + '"}';
     }
-
     /*
      * 载荷上限按 **UTF-8 字节** 计（不是 `string.length` 的 UTF-16 码元数）：
      * Node 侧 `payload/host.js` 用 `Buffer.byteLength()` 判断同一件事，两侧必须同口径 ——
@@ -620,31 +702,27 @@ export class HostBridge {
      */
     const actualBytes: number = HostBridge.utf8Len(argsJson);
     if (actualBytes < 0) {
-      this.errors = this.errors + 1;
       return '{"ok":false,"error":"bad-args","name":"' + HostBridge.jsonEsc(safeName) +
         '","detail":"payload byte length unavailable (utf8 encode failed)"}';
     }
     if (actualBytes > this.capBytes) {
-      this.errors = this.errors + 1;
       return '{"ok":false,"error":"payload-too-large","name":"' + HostBridge.jsonEsc(safeName) +
         '","capBytes":' + this.capBytes + ',"actual":' + actualBytes + '}';
     }
+    return '';
+  }
 
+  /** 处理器抛错时的结构化返回（`describeThrown` 自身已保证不抛，这里再包一层兜底） */
+  private threwBody(safeName: string, e: Object): string {
+    this.errors = this.errors + 1;
+    let detail: string = '(unserializable thrown value)';
     try {
-      return h(argsJson);
-    } catch (e) {
-      this.errors = this.errors + 1;
-      // B3：`describeThrown` 自身已保证不抛；这里再包一层，让 dispatch 的「永不抛」不依赖它
-      // （契约 §2.7 明文要求 dispatch 永不抛异常）。
-      let detail: string = '(unserializable thrown value)';
-      try {
-        detail = Logger.describeThrown(e);
-      } catch (describeFailed) {
-        detail = '(describeThrown failed)';
-      }
-      return '{"ok":false,"error":"handler-threw","name":"' + HostBridge.jsonEsc(safeName) +
-        '","detail":"' + HostBridge.jsonEsc(detail) + '"}';
+      detail = Logger.describeThrown(e);
+    } catch (describeFailed) {
+      detail = '(describeThrown failed)';
     }
+    return '{"ok":false,"error":"handler-threw","name":"' + HostBridge.jsonEsc(safeName) +
+      '","detail":"' + HostBridge.jsonEsc(detail) + '"}';
   }
 
   /**
