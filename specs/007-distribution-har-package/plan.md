@@ -19,7 +19,7 @@
 | compile SDK | `6.1.1.125`（HAR 内 `module.json` 的 `compileSdkVersion`） | 产物实测 ✅ |
 | SDK 根 | `D:\oh-workspace\command-line-tools\sdk`（`sdk/default/openharmony/native/llvm/lib/aarch64-linux-ohos/libc++_shared.so` 1,262,504 B） | 与 `runtime.lock.json:48-53` 的 `sdkRelPath` 一致 ✅ |
 | host Node | `v24.7.0`（`provision.mjs`/`elf-inspect.py` 用；`provision.mjs` 要求 ≥18） | `node -v` ✅ |
-| 目标设备 | HAD-W32 / HarmonyOS 6.1.0 / API 26 / arm64-v8a | `runtime.lock.json:44` ✅ |
+| 目标设备 | HAD-W24 / 7.0.0.107(SP7C00E100R13P5) / API 26 / OpenHarmony-7.0.0.105 / arm64-v8a | `runtime.lock.json:44` ✅ |
 | HAR 构建命令 | `cmd //c "D:\oh-workspace\command-line-tools\bin\hvigorw.bat --mode module -p module=library@default assembleHar --no-daemon"` | `README.md:37-41` + 消费方脚本同口径（`../pi-desktop-ark/scripts/build-bridge-har.sh:31`）✅ |
 | HAP 构建命令（验证用） | `DEVECO_SDK_HOME=<CLT>/sdk hvigorw assembleHap --mode module -p product=default -p buildMode=debug --no-daemon` | §7.4 ④（探针工程实测 **34 s 出 HAP** 🔶） |
 | 发布命令 | `ohpm publish <assembleHar 产出的 .har>`（**不对源码目录 publish**） | `library/.ohpmignore:9-10`（推荐口径）；⬜ 未实测 |
@@ -210,7 +210,7 @@ HAR 的资源与消费方资源在合并时同名即告警：写 `"description":
 
 | bridge 版本 | libnode 版本 | `abi` | `deployAs`（HAP 内名） | SONAME | `size` (B) | SHA-256 | 门禁 | 真机验证 |
 |---|---|---|---|---|---|---|---|---|
-| **`0.1.0`**（`library/oh-package.json5:3`；HAR 内同） | `v24.2.0`（`nodeModuleVersion: 137`） | `arm64-v8a` | `libnode.so` | `libnode.so.137` | 126,809,264 | `3019bf5f9a279d98a87606fc13c53b0e797b6a50cf174f8a1243d880c71151a1` | 7 项全过（`typeDyn`/`ptInterp=0`/`machineAArch64`/`neededLibcxx`/`exportsNodeStart`/`sha256Match`/`versionGeq2219`） | `2026-10-16` · `HAD-W32 / HarmonyOS 6.1.0 / API 26 / arm64-v8a` |
+| **`0.1.0`**（`library/oh-package.json5:3`；HAR 内同） | `v24.2.0`（`nodeModuleVersion: 137`） | `arm64-v8a` | `libnode.so` | `libnode.so.137` | 126,809,264 | `3019bf5f9a279d98a87606fc13c53b0e797b6a50cf174f8a1243d880c71151a1` | 7 项全过（`typeDyn`/`ptInterp=0`/`machineAArch64`/`neededLibcxx`/`exportsNodeStart`/`sha256Match`/`versionGeq2219`） | `2026-10-16` · `HAD-W24 / 7.0.0.107(SP7C00E100R13P5) / API 26 / OpenHarmony-7.0.0.105 / arm64-v8a` |
 
 **矩阵的两个缺口**（Phase 2 补齐，FR-007-008）：
 

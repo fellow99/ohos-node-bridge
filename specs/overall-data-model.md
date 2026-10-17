@@ -64,7 +64,7 @@
 | `gates.sha256Match` | `bool` | 门禁⑥ 摘要一致 | 必须为真 | `true` |
 | `gates.versionGeq2219` | `bool` | 门禁⑦ 大小一致 + 版本串存在（`>=22.19.0`） | 必须为真 | `true` |
 | `verifiedOn` | `string` | 真机验证日期 | `YYYY-MM-DD`；改锁文件必须重跑并回写（宪法 §六-2） | `"2026-10-16"` |
-| `verifiedDevice` | `string` | 验证设备标识 | 形如 `<机型> / <OS 版本> / API <n> / <abi>` | `"HAD-W32 / HarmonyOS 6.1.0 / API 26 / arm64-v8a"` |
+| `verifiedDevice` | `string` | 验证设备标识 | 形如 `<机型> / <OS 版本> / API <n> / <abi>` | `"HAD-W24 / 7.0.0.107(SP7C00E100R13P5) / API 26 / OpenHarmony-7.0.0.105 / arm64-v8a"` |
 | `verifiedNotes` | `string` | 验证结论备注 | 必须写出「验到了什么程度」与残留平台前提 | ✅（写明 `--jitless` 轮次跑通 + 无 ACL 即 SIGTRAP 属平台前置、与产物无关） |
 
 ### 1.4 `libcxx`

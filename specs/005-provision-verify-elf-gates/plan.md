@@ -18,7 +18,7 @@
 | 工具链 Node | 本机 ✅ `node v24.7.0` | 脚本要求 **Node ≥ 18**（用到内置 `fetch` 与 `node:` 前缀导入）；其中 **`NODE_USE_ENV_PROXY` 需 Node ≥ 24**（工具自己的提示文本就这么写：`provision.mjs:253`） |
 | 仅排障用 Python | Python 3（`hashlib` / `struct` / `sys`，无 pip 包） | 只服务 `tools/elf-inspect.py`；门禁不依赖它（`provision.mjs:85` 注释点明「不依赖 python/llvm」） |
 | 目标 ABI | `arm64-v8a`（AArch64） | 只做真机；x86_64 明确不做（`openItems[2]`） |
-| 真机基线 | HAD-W32 / HarmonyOS 6.1.0 / **API 26** / arm64-v8a | 锁文件 `verifiedDevice`；与工程 `targetSdkVersion 6.1.1(24)` 不是同一个口径（TECH §5-1） |
+| 真机基线 | HAD-W24 / 7.0.0.107(SP7C00E100R13P5) / **API 26** / OpenHarmony-7.0.0.105 / arm64-v8a | 锁文件 `verifiedDevice`；与工程 `targetSdkVersion 6.1.1(24)` 不是同一个口径（TECH §5-1） |
 | 产物落点 | `<模块>/entry/libs/<abi>/`（消费方）· `library/libs/arm64-v8a/`（本仓库 CMake 输出） | 规划 §7.2 写的是 `library/src/main/libs/...`，实际 CMake 输出在 `library/libs/...`（STRUCTURE §8.1）⚠️ 与 `--out` 的取值有关，但不改变工具行为 |
 
 ### 1.2 依赖（零第三方）
@@ -155,7 +155,7 @@ PIE 产物**能 `dlopen` 成功**，但 V8 在 `Isolate::Initialize` 的**首次
 | `mirror` | object | ✅ | 镜像（可选存在）：`kind:null` 表示未建立 | `{kind:null, note:"…"}` | `provision.mjs:239`（`mirror?.url`） |
 | `gates` | object | ✅ | 七项门禁的**存档**（见 4.3） | 七项全过 | ⚠️ **无任何工具读**（D-3/D-12） |
 | `verifiedOn` | string(date) | ✅ | 真机验证日期（宪法 §六.2 要求换版本时写回） | `2026-10-16` | ⚠️ 无工具读（审计用） |
-| `verifiedDevice` | string | ✅ | 机型 / 系统 / API / ABI | `HAD-W32 / HarmonyOS 6.1.0 / API 26 / arm64-v8a` | ⚠️ 同上 |
+| `verifiedDevice` | string | ✅ | 机型 / 系统 / API / ABI | `HAD-W24 / 7.0.0.107(SP7C00E100R13P5) / API 26 / OpenHarmony-7.0.0.105 / arm64-v8a` | ⚠️ 同上 |
 | `verifiedNotes` | string | ✅ | 验证结论与**前置条件**（例：无 ACL 必带 `--jitless`，否则 SIGTRAP 是平台前置） | 见 `:45` | ⚠️ 同上 |
 
 ### 4.3 `gates` 七项子字段

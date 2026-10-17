@@ -18,7 +18,7 @@
 | 原生面 | `libnode_bridge.so` 目前只导出 3 个接口（`start` / `isRunning` / `version`），**只经 `.d.ts` 环境声明接入** | ✅ `node_bridge.c:285-293`；✅ `cpp/types/libnode_bridge/index.d.ts`（15 行）；S1 / S8 |
 | 日志 | `@kit.PerformanceAnalysisKit` 的 `hilog`，域 `0xD0033`、TAG `NODE_BRIDGE`；文件尾部读回走 `Logger.tail` | ✅ `Logger.ets:1,4,14-24,27-52`；S9 / C3 |
 | 计时 | ArkTS `setTimeout`（超时兜底）+ Node 侧 `setTimeout`（对端失联兜底），**先到者胜** | ⬜ 本设计 |
-| 平台事实 | 真机 HarmonyOS 6.1.0 / API 26 / arm64-v8a；Node 跑在 **detached pthread（32 MB 栈）**，与 ArkTS 线程**完全解耦**；进程内 `node::Start` 只能一次 | ✅ §D.8；✅ §5.2；✅ `NodeRuntime.ets:10-17` |
+| 平台事实 | 真机 7.0.0.107(SP7C00E100R13P5) / OpenHarmony-7.0.0.105 / API 26 / arm64-v8a；Node 跑在 **detached pthread（32 MB 栈）**，与 ArkTS 线程**完全解耦**；进程内 `node::Start` 只能一次 | ✅ §D.8；✅ §5.2；✅ `NodeRuntime.ets:10-17` |
 | 构建/工具链 | DevEco 6.1 + hvigor；工具链版本差异是致命风险，须锁定 | 🔶 R16 |
 | 第三方依赖 | **零**（桥不得引入 npm 依赖；N-API 面由本工程自带） | ✅ `library/oh-package.json5` |
 

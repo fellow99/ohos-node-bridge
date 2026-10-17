@@ -41,8 +41,8 @@
         "versionGeq2219": true
       },
       "verifiedOn": "2026-10-16",
-      "verifiedDevice": "HAD-W32 / HarmonyOS 6.1.0 / API 26 / arm64-v8a",
-      "verifiedNotes": "进程内 dlopen + node::Start 跑通（--jitless 轮次）；无 ACL 时不带 --jitless 即 SIGTRAP（平台前置，与产物无关）"
+      "verifiedDevice": "HAD-W24 / 7.0.0.107(SP7C00E100R13P5) / API 26 / OpenHarmony-7.0.0.105 / arm64-v8a",
+      "verifiedNotes": "进程内 dlopen + node::Start 跑通（--jitless 轮次）；无 ACL 时不带 --jitless 即 SIGTRAP（平台前置，与产物无关）。⚠️ 2026-10-17 更正：verifiedDevice 原记录为历史记录值「HAD-W32 / HarmonyOS 6.1.0 / API 26 / arm64-v8a」（另一台参考设备/旧系统），本轮审计设备自报 HAD-W24 / 7.0.0.107(SP7C00E100R13P5) / API 26 / OpenHarmony-7.0.0.105（param get const.product.* + uname -a）；原值保留在此，不静默改写历史"
     }
   ],
   "libcxx": {

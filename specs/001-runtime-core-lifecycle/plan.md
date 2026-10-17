@@ -16,7 +16,7 @@
 | 形态 | ArkTS **HAR**（`type: har`），非独立应用；无窗口、无页面、无 ArkWeb | `library/src/main/module.json5:4` ✅ · C1 |
 | 模型 | Stage 模型（`apiType: stageMode`），Ability 生命周期由消费方驱动 | `library/build-profile.json5:2` ✅ |
 | SDK | `compatibleSdkVersion 5.0.5(17)` / `targetSdkVersion 6.1.1(24)`；目标是 **API 17+ / 24 / 26** 的兼容矩阵 | `build-profile.json5:23,26` ✅ · 规划 §7.5 |
-| 真机基线 | HAD-W32 / HarmonyOS 6.1.0 / **API 26** / arm64-v8a | 规划 §D.8 ✅ |
+| 真机基线 | HAD-W24 / 7.0.0.107(SP7C00E100R13P5) / **API 26** / OpenHarmony-7.0.0.105 / arm64-v8a | 规划 §D.8 ✅ |
 | 设备类型 | `2in1` / `tablet`（不做 phone） | `module.json5:5-8` ✅ · 规划 §7.5 |
 | 线程 | 本模块**不建线程**；启动发生在 002 的 detached pthread（32 MB 栈），UI 线程只做投递 | 规划 §5.2 · §5.10 ① 🔶 |
 | 权限 | 本模块不需要任何权限；HAR 仅声明 `INTERNET` / `GET_NETWORK_INFO`（供 Node 侧 loopback 服务），受限 ACL 由消费方按自己包名申请 | `module.json5:12-22` ✅ · 规划 §7.5 / §9.4 |

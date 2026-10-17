@@ -97,7 +97,7 @@
 | **FR-005-027** | **自签离线自足**：纯 SHA-256 Merkle + fs-verity descriptor，**无私钥、无证书、不依赖 SDK 的 `binary-sign-tool`**；缺 `.codesign` 段时由本工具自实现 `add-section`（页对齐 4096 B、重建段表、**原字节一字不动**） | `ohos-selfsign.mjs:92-146,213-261`；§D.4/§D.5 | ✅ 实测（`.codesign @ 126812160` 页对齐；`selftest: IDENTICAL`） |
 | **FR-005-028** | **Verifier 必须是内容校验**：`verify` 不只查「有没有 `.codesign`」，而要校验 Merkle 根与签名摘要 | `ohos-selfsign.mjs:161-188`（十项） | ✅ 实测（R21 的处置：口径不一 ⇒ 校验内容） |
 | **FR-005-029** | **零依赖只读检查器**：`tools/elf-inspect.py` 用纯 Python 自解析 ELF，回答「形态能不能 `dlopen`」并打印 SHA-256 / SONAME / 段表解析完整度 | `elf-inspect.py`（仅 `hashlib`/`struct`/`sys`） | ✅ 实现为**四项判定 + 打印项**，docstring 已改为「4 项判定 + 3 项打印 + 退出码 0/2」；`VERDICT: FAIL` 现返回 **2**（A2/R2，2026-10-17） |
-| **FR-005-030** | **供应链记录**：每个运行时条目必须带来源（仓库 / tag / 资产 / URL）、许可、构建方式、以及「验过没有」（`verifiedOn` / `verifiedDevice` / `verifiedNotes`） | 锁文件 `runtimes[].source` / `verified*`（C7 供应链纪律 · §5.8 表「供应链纪律」） | ✅ 已写入（2026-10-16 / HAD-W32 / 含 SIGTRAP 前置说明） |
+| **FR-005-030** | **供应链记录**：每个运行时条目必须带来源（仓库 / tag / 资产 / URL）、许可、构建方式、以及「验过没有」（`verifiedOn` / `verifiedDevice` / `verifiedNotes`） | 锁文件 `runtimes[].source` / `verified*`（C7 供应链纪律 · §5.8 表「供应链纪律」） | ✅ 已写入（2026-10-16 / HAD-W24 / 含 SIGTRAP 前置说明） |
 
 ---
 

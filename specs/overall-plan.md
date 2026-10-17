@@ -17,7 +17,7 @@
 |---|---|---|
 | 设备类型 | `2in1` / `tablet`（**不做 phone**） | `library/src/main/module.json5:5-8` ✅ / 规划 §1 |
 | 芯片/ABI | `arm64-v8a`（**不做 x86_64**） | 模块 `build-profile.json5:8-10` ✅ / `runtime.lock.json:62` |
-| 真机基线 | HAD-W32 / HarmonyOS **6.1.0** / **API 26** / arm64-v8a | `runtime.lock.json:44` ✅ + 规划 §D.8/§D.9/§D.10 |
+| 真机基线 | HAD-W24 / 7.0.0.107(SP7C00E100R13P5) / **API 26** / OpenHarmony-7.0.0.105 / arm64-v8a | `runtime.lock.json:44` ✅ + 规划 §D.8/§D.9/§D.10 |
 | 工程 SDK 声明 | `compatibleSdkVersion 5.0.5(17)` / `targetSdkVersion 6.1.1(24)` | 根 `build-profile.json5:23,26` ✅ ⚠️（与设备 API 26 是**两个数**，不可混用，见 TECH §5） |
 | 宿主进程模型 | Node 跑在**宿主应用自己的进程**内（无子进程、无守护） | 规划 §4.6 路线 A / §5.2 |
 | 刚性前置权限 | `ohos.permission.kernel.ALLOW_WRITABLE_CODE_MEMORY`（`system_basic` / API 14+ / 仅平板+2in1 / `system_grant`）—— **由消费方按自己的包名申报** | 规划 §9.4 + §D.8（无它即 SIGTRAP）+ §D.10（消费方真机已达成）✅ |

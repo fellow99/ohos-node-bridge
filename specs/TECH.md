@@ -16,7 +16,7 @@
 | **宿主语言（库）** | ArkTS / ArkUI（stage 模型，HAR 组件库） | 对外 API、状态机、路径装配、日志、桥的 ArkTS 半 | 库的消费者就是 ArkTS 应用，非 ArkTS 无法「零 C++ 接入」；HAR 是 ohpm 的组件库形态（规划 §7.5）；严格模式禁 `any/unknown`（S1，`arkts-no-any-unknown` 症状见表 #13） |
 | **类型契约** | `.ets` 声明 + `cpp/types/*/index.d.ts` 环境声明 | 原生模块只经 `.d.ts` 接入；`Types.ets` 即对外契约 | S1/S3；`.so` 由 hvigor 的 CMake+ProcessLibs 流程产出，用「裸名 import + .d.ts」是唯一不触发 `arkts-no-any-unknown` 的接法（规划 §7.2 / 症状 #13） |
 | **IDE / 构建** | DevEco Studio 6.1 + hvigor（CLT 的 `hvigorw.bat`）+ `@ohos/hvigor-ohos-plugin` | 构建 HAR / HAP；native 交叉编译；签名注入 | 官方唯一支持的构建链（无 hvigor 无法产出合法 HAR/HAP）；本仓库实测可用命令行构建，无需 GUI ✅；`hvigorfile.ts` 把签名材料抽成 env → 本地文件 → 未签名包三级（仓库不落密钥） |
-| **SDK** | `ohos-sdk`（CLT SDK；工程内声明 `compatibleSdkVersion 5.0.5(17)` / `targetSdkVersion 6.1.1(24)`）⚠️ | 提供 `libace_napi.z.so`、`libhilog_ndk.z.so`、LLVM 交叉工具链、`libc++_shared.so` | 与真机基线 HAD-W32 / HarmonyOS 6.1.0 / **API 26** 同代（规划 §D.8）；⚠️ **工程 targetSdkVersion 是 6.1.1(24)**，比基线设备 API 26 低一档 ⇒ 见 §5 风险 |
+| **SDK** | `ohos-sdk`（CLT SDK；工程内声明 `compatibleSdkVersion 5.0.5(17)` / `targetSdkVersion 6.1.1(24)`）⚠️ | 提供 `libace_napi.z.so`、`libhilog_ndk.z.so`、LLVM 交叉工具链、`libc++_shared.so` | 与真机基线 HAD-W24 / 7.0.0.107(SP7C00E100R13P5) / OpenHarmony-7.0.0.105 / **API 26** 同代（规划 §D.8）；⚠️ **工程 targetSdkVersion 是 6.1.1(24)**，比基线设备 API 26 低一档 ⇒ 见 §5 风险 |
 | **原生接口层** | NAPI（`libace_napi.z.so`，`napi_module_register` / `napi_property_descriptor` 直用 C API） | ArkTS ↔ C 的唯一通道（初版 `start`/`isRunning`/`version`；Phase 1 扩为 **5 个**，增加 `lastError`/`stage`，`start()` 增加第 6 参 `envPairs`） | 引导件**只**依赖 NAPI 与 hilog；NAPI 是 ArkTS NativeModule 的官方 ABI；S8 的口径是「C 侧接口保持极窄，扩展必须**同时**改 `.d.ts`」（扩展后 `index.d.ts` 已同步更新） |
 | **原生语言/构建** | C11 + CMake **3.5.0**（`cmake_minimum_required(VERSION 3.5.0)`，实测工具链 CMake 3.28.2 ✅） | 引导件 `libnode_bridge.so`（SHARED） | C11 而非 C++：引导件不需要 C++ 运行时，避免与 `libc++_shared.so` 版本纠缠；`3.5.0` 是 hvigor 模板下最保守的下限（写高版本会被旧工具链拒）；S6 要求显式设 `CMAKE_LIBRARY_OUTPUT_DIRECTORY` → `<module>/libs/${OHOS_ARCH}` |
 | **运行时** | Node.js **v24.2.0**（`libnode.so`，`electerm/ohos-node-shared` 产物） | 应用进程内的 Node 运行时 | ① 真共享库（`ET_DYN`、**`PT_INTERP=0`**）⇒ 唯一能 `dlopen` 进 App 进程的形态（硬约束 ①）；② 内嵌 ICU 与 V8 快照（`icudtl.dat`/`snapshot_blob.bin` 零命中）⇒ HAP 只需 2 个 `.so`；③ 满足消费方 `engines >= 22.19.0`；④ `--expose-internals` flag 已编译进产物（字符串命中 9 处）⇒ 「零原生模块移植」路线可用；⑤ 与 🔶 notes 真机验证过的版本同为 24.2.0（规划 §D.4 候选表 / §5.8） |
@@ -68,7 +68,7 @@
 | 引擎下限 | `process.version >= 22.19.0`（低于则启动即 warn，不静默） | 规划 §5.8；⬜ 当前未实现该 warn |
 | 工程 SDK | `compatibleSdkVersion 5.0.5(17)` / `targetSdkVersion 6.1.1(24)` / `runtimeOS HarmonyOS` | `build-profile.json5` ✅ |
 | 样例 App | `minAPIVersion 17` / `targetAPIVersion 24` | `AppScope/app.json5` ✅ |
-| 真机基线 | **HAD-W32 / HarmonyOS 6.1.0 / API 26 / arm64-v8a** | `runtime.lock.json:44` ✅ + §D.8/§D.9/§D.10 |
+| 真机基线 | **HAD-W24 / 7.0.0.107(SP7C00E100R13P5) / API 26 / OpenHarmony-7.0.0.105 / arm64-v8a** | `runtime.lock.json:44` ✅ + §D.8/§D.9/§D.10 |
 | 兼容矩阵（规划口径） | `node-bridge vX.Y` × `libnode 22.19+/24.x` × `API 17+/24/26` × `deviceTypes 2in1/tablet` | 规划 §7.5 |
 
 ---

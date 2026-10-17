@@ -16,7 +16,7 @@
 | 形态 | HarmonyOS App **进程内**原生引导件（stage model，`apiType: stageMode`），随 HAP 编译；模块类型 HAR（`type: har`，`deviceTypes: [2in1, tablet]`） | `library/build-profile.json5:2` · `library/src/main/module.json5:2-8` |
 | ABI | **仅 `arm64-v8a`**（`abiFilters`）；ELF 为 `AArch64` | `library/build-profile.json5:8-10` · 规划 §5.8 门禁 ③ |
 | 工程 SDK 口径 | `targetSdkVersion 6.1.1(24)` / `compatibleSdkVersion 5.0.5(17)` | 根 `build-profile.json5:23-26` · TECH §5 #1 |
-| 真机基线（证据来源设备） | `HAD-W32 / HarmonyOS 6.1.0 / **API 26** / arm64-v8a` | 规划 §D.8–§D.10 ✅ |
+| 真机基线（证据来源设备） | `HAD-W24 / 7.0.0.107(SP7C00E100R13P5) / **API 26** / OpenHarmony-7.0.0.105 / arm64-v8a` | 规划 §D.8–§D.10 ✅ |
 | 语言与标准 | **C11**（刻意不用 C++：引导件不需要 C++ 运行时，避免与 `libc++_shared.so` 版本纠缠） | `CMakeLists.txt:4` · TECH §1 |
 | 构建 | CMake **3.5.0** 下限（实测工具链 CMake 3.28.2）；hvigor `externalNativeOptions.path = ./src/main/cpp/CMakeLists.txt`，`cppFlags` 空 | `CMakeLists.txt:1` · `library/build-profile.json5:4-11` · TECH §1 ✅ |
 | 全局构建开关 | 根 `build-profile.json5` 的 `nativeLib.collectAllLibs = true`（决定了 HAR 会一并收集 `libc++_shared.so`） | 根 `build-profile.json5:27-30` · STRUCTURE §3 ✅ |
