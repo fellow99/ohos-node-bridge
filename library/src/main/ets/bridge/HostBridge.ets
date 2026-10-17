@@ -1,4 +1,5 @@
 import { buffer } from '@kit.ArkTS';
+import nodeBridge from 'libnode_bridge.so';
 import { HostBridgeHandler } from '../runtime/Types';
 import { Logger } from '../log/Logger';
 
@@ -6,13 +7,25 @@ import { Logger } from '../log/Logger';
 const DEFAULT_CAP_BYTES: number = 8 * 1024 * 1024;
 
 /**
- * 003-host-bridge —— Node ↔ ArkTS 双向调用（骨架）。
+ * 原生层 `pollHostRequest()` 返回的请求结构（字段名与 `node_bridge.c` 的 snprintf 一致）。
+ * 只做类型载体：`args` 是**已经转过义**的 JSON 文本，用前先 JSON.parse。
+ */
+class HostRequest {
+  id: number = 0;
+  name: string = '';
+  args: string = '';
+}
+
+/**
+ * 003-host-bridge —— Node ↔ ArkTS 双向调用。
  *
- * ⚠️ 本文件的 `dispatch` 目前是**纯 JS 骨架**：注册表 + 分发 + JSON 编解码。
- * Phase 2 必须补上的部分（工程规划 §5.4）：
- *   ① Node 侧调用必须经 **`napi_threadsafe_function`** 回到 ArkTS 主线程（当前 `dispatch` 只是同线程直调）；
- *   ② ArkTS 侧调用 Node 需要一条**反向通道**（原生层 → Node 的 C++ addon / `require('internal/...')` 桩）；
- *   ③ 每条调用要有**超时与上限**（默认 30s、并发上限可配），失败必须返回结构化错误而不是抛异常穿透。
+ * 传输层状态（2026-10-17，行动项 E18）：
+ *   ① ✅ Node → ArkTS：`startTransport()` 起一个 100 ms 轮询泵，读原生 `pollHostRequest()`、
+ *      dispatch 后 `completeHostRequest()` 回填。**刻意不用 `napi_threadsafe_function`**——
+ *      它要在 ArkTS env 上创建，而 HarmonyOS ArkTS NAPI 对它的支持未经验证（见 `node_bridge.c` 长注释）。
+ *   ② ✅ ArkTS → Node：原生 `callHost(name, argsJson)`，由 `payload/host.js#setTransport` 注册；
+ *      Node 侧阻塞等回填，15 s 超时抛错。
+ *   ③ ✅ 超时 15 s / 并发 4 / name 128 B / args 8 KB / result 64 KB，超限与超时都返回**结构化错误**。
  *
  * 为什么不用旧壳的 `systemPreferences.callArkTSFunction`：那只支持「取一个偏好值」，不是能力调用（§2.2）。
  *
@@ -38,6 +51,11 @@ export class HostBridge {
   private invocations: number = 0;
   private errors: number = 0;
   private capBytes: number = DEFAULT_CAP_BYTES;
+  /** 传输泵定时器句柄（-1 = 未启动） */
+  private pumpTimer: number = -1;
+  private pumpRounds: number = 0;
+  private pumpDispatched: number = 0;
+  private pumpErrors: number = 0;
 
   /** 注册一个能力（同名覆盖） */
   register(name: string, handler: HostBridgeHandler): void {
@@ -61,6 +79,97 @@ export class HostBridge {
       out.push(k);
     });
     return out;
+  }
+
+  /**
+   * 启动传输泵：**Node JS 线程 → ArkTS 主线程**的轮询端。
+   *
+   * 为什么是轮询而不是 `napi_threadsafe_function`：见 `node_bridge.c` 里「宿主桥传输」的长注释
+   * —— tsfn 要在 ArkTS env 上创建，而 HarmonyOS ArkTS NAPI 对它的支持未经验证；一旦不支持就是
+   * 启动期硬失败。轮询用最多 100 ms 的延迟换零平台风险，而宿主能力全是用户动作。
+   *
+   * 幂等：重复调用只返回当前状态，不重复起定时器。
+   * @returns 人读状态串（同时进日志）
+   */
+  startTransport(intervalMs: number): string {
+    if (this.pumpTimer >= 0) {
+      return 'already-running:' + this.pumpDispatched + '/' + this.pumpRounds;
+    }
+    const iv: number = intervalMs > 0 ? intervalMs : 100;
+    this.pumpTimer = setInterval(() => {
+      this.pumpTick();
+    }, iv);
+    Logger.info('host-bridge: 传输泵已启动（轮询 ' + iv + ' ms，方向 Node→ArkTS；'
+      + '原生侧上限 name=128B args=8KB result=64KB 超时=15s）');
+    return 'started:' + iv + 'ms';
+  }
+
+  /** 停止传输泵（幂等） */
+  stopTransport(): void {
+    if (this.pumpTimer < 0) {
+      return;
+    }
+    clearInterval(this.pumpTimer);
+    this.pumpTimer = -1;
+    Logger.info('host-bridge: 传输泵已停止（累计轮询 ' + this.pumpRounds
+      + ' 次 / 分发 ' + this.pumpDispatched + ' 次 / 错误 ' + this.pumpErrors + ' 次）');
+  }
+
+  /** 诊断串（诊断面板与日志用；不含任何载荷内容） */
+  transportStats(): string {
+    return 'running=' + (this.pumpTimer >= 0)
+      + ' rounds=' + this.pumpRounds
+      + ' dispatched=' + this.pumpDispatched
+      + ' errors=' + this.pumpErrors;
+  }
+
+  /**
+   * 一轮轮询：取一个请求 → 分发 → 回填。
+   * **绝不抛**：任何异常都转成结构化结果回填（否则 Node 侧只能等到 15 s 超时）。
+   */
+  private pumpTick(): void {
+    this.pumpRounds = this.pumpRounds + 1;
+    let raw: string = '';
+    try {
+      raw = nodeBridge.pollHostRequest();
+    } catch (e) {
+      this.pumpErrors = this.pumpErrors + 1;
+      Logger.warn('host-bridge: pollHostRequest 抛异常：' + JSON.stringify(e));
+      return;
+    }
+    if (raw.length === 0) {
+      return;
+    }
+    let req: HostRequest;
+    try {
+      req = JSON.parse(raw) as HostRequest;
+    } catch (e) {
+      this.pumpErrors = this.pumpErrors + 1;
+      Logger.warn('host-bridge: 请求不是合法 JSON（丢弃本轮）：' + raw);
+      return;
+    }
+    this.pumpDispatched = this.pumpDispatched + 1;
+    let result: string;
+    try {
+      result = this.dispatch(req.name, req.args);
+    } catch (e) {
+      // dispatch 契约上永不抛；真抛了也必须回填，否则 Node 侧只能等超时
+      this.pumpErrors = this.pumpErrors + 1;
+      result = '{"ok":false,"error":"host-dispatch-failed","name":"'
+        + HostBridge.jsonEsc(req.name) + '"}';
+      Logger.error('host-bridge: dispatch 抛出（已转为结构化错误回填）：' + JSON.stringify(e));
+    }
+    try {
+      const rc: number = nodeBridge.completeHostRequest(req.id, result);
+      if (rc !== 0) {
+        this.pumpErrors = this.pumpErrors + 1;
+        Logger.warn('host-bridge: completeHostRequest 返回 ' + rc
+          + '（id=' + req.id + ' 可能已超时被 Node 侧放弃）');
+      }
+    } catch (e) {
+      this.pumpErrors = this.pumpErrors + 1;
+      Logger.warn('host-bridge: completeHostRequest 抛异常：' + JSON.stringify(e));
+    }
   }
 
   /**

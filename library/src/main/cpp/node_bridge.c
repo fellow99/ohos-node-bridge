@@ -1075,6 +1075,283 @@ static void *bootstrap(void *arg) {
   return NULL;
 }
 
+/* --------------------------------------------------- 宿主桥传输（Phase 2）---- */
+
+/*
+ * 方向：**Node 的 JS 线程 → ArkTS 主线程**（反向调用：宿主能力、权限、选择器、通知）。
+ *
+ *
+ * tsfn 必须在**目标 env** 上创建，而这里的目标是 ArkTS 运行时；HarmonyOS 的 ArkTS NAPI
+ * 对 `napi_create_threadsafe_function` 的支持**未经验证**，一旦不支持就是启动期硬失败。
+ * 本实现改用**轮询**：ArkTS 侧每 100 ms 调一次 `pollHostRequest()`（无请求时只做一次
+ * 互斥量判断，代价可忽略）；有请求就 dispatch，再 `completeHostRequest()` 回填结果。
+ *
+ * 代价与取舍：单次调用最多 ~100 ms 延迟 —— 而本工程的宿主能力（权限检查、文件选择器、
+ * 通知、外链）全是**用户动作**，100 ms 不可感知。换来的是**零平台 API 风险**。
+ *
+ * ## 纪律
+ *
+ * - 任一环节超限（name 128 B / args 8 KB / result 64 KB）⇒ **直接失败并写 lastError**，
+ *   不静默截断（宪法 C2）。
+ * - Node 侧在条件变量上等结果，超时 15 s ⇒ 抛错，**绝不让 Node 线程永久挂住**。
+ * - 槽位固定 4 个：宿主调用是低频串行场景，用固定数组避免动态分配表。
+ */
+/* 前置声明：get_str_arg 定义在 NAPI 接口区（本块之后），C 需要先声明 */
+static int get_str_arg(napi_env env, napi_value *argv, size_t argc, size_t idx,
+                       char *dest, size_t cap, const char *name);
+
+#define HOST_NAME_LEN 128
+#define HOST_ARGS_LEN 8192
+#define HOST_RESULT_LEN 65536
+#define HOST_TIMEOUT_MS 15000
+#define HOST_MAX_PENDING 4
+
+/* 槽位状态机：0=空闲 1=Node 已提交 2=ArkTS 已取走 3=结果就绪 */
+typedef struct {
+  int state;
+  long id;
+  char name[HOST_NAME_LEN];
+  char *args;
+  char *result;
+  int status;                /* 0 = handler 正常；-1 = handler 抛异常 */
+  pthread_mutex_t lock;
+  pthread_cond_t cond;
+} host_slot_t;
+
+static host_slot_t g_host_slots[HOST_MAX_PENDING];
+static pthread_mutex_t g_host_lock = PTHREAD_MUTEX_INITIALIZER;
+static long g_host_next_id = 1;
+static int g_host_slots_ready = 0;
+static volatile int g_host_calls = 0;        /* 成功完成的往返次数（诊断用） */
+static volatile int g_host_timeouts = 0;
+
+static void host_slots_init(void) {
+  if (g_host_slots_ready) return;
+  pthread_mutex_lock(&g_host_lock);
+  if (!g_host_slots_ready) {
+    for (int i = 0; i < HOST_MAX_PENDING; i++) {
+      memset(&g_host_slots[i], 0, sizeof(g_host_slots[i]));
+      pthread_mutex_init(&g_host_slots[i].lock, NULL);
+      pthread_cond_init(&g_host_slots[i].cond, NULL);
+      g_host_slots[i].state = 0;
+      g_host_slots[i].id = 0;
+    }
+    g_host_slots_ready = 1;
+  }
+  pthread_mutex_unlock(&g_host_lock);
+}
+
+/** JSON 字符串转义（只处理解码所需的最小集合：`"` `\` 与 0x00-0x1F） */
+static void host_json_escape(const char *src, char *dst, size_t cap) {
+  size_t o = 0;
+  if (cap == 0) return;
+  for (size_t i = 0; src != NULL && src[i] != 0; i++) {
+    unsigned char c = (unsigned char)src[i];
+    const char *rep = NULL;
+    char buf[8];
+    if (c == '"') rep = "\\\"";
+    else if (c == '\\') rep = "\\\\";
+    else if (c == '\n') rep = "\\n";
+    else if (c == '\r') rep = "\\r";
+    else if (c == '\t') rep = "\\t";
+    else if (c < 0x20) {
+      snprintf(buf, sizeof(buf), "\\u%04x", (unsigned)c);
+      rep = buf;
+    }
+    size_t need = rep != NULL ? strlen(rep) : 1;
+    if (o + need + 1 >= cap) break;     /* 留 NUL；超限即截断（调用方已按上限校验） */
+    if (rep != NULL) { memcpy(dst + o, rep, need); o += need; }
+    else dst[o++] = (char)c;
+  }
+  dst[o] = 0;
+}
+
+/**
+ * pollHostRequest() -> string
+ *   ''  = 当前没有待处理请求
+ *   否则 = `{"id":N,"name":"…","args":"…"}`（args 是**转义后的字符串**，调用方再 JSON.parse）
+ */
+static napi_value js_poll_host_request(napi_env env, napi_callback_info info) {
+  (void)info;
+  host_slots_init();
+  /* 转义后最长可达 2×（`"` `\` 与换行都已覆盖）；按 2× 取上限，宁大勿截 */
+  const size_t out_cap = (HOST_ARGS_LEN + HOST_NAME_LEN) * 2 + 64;
+  char *out = (char *)malloc(out_cap);
+  if (out == NULL) {
+    set_error("pollHostRequest：内存不足（out 缓冲）");
+    napi_value empty;
+    napi_create_string_utf8(env, "", NAPI_AUTO_LENGTH, &empty);
+    return empty;
+  }
+  out[0] = 0;
+  pthread_mutex_lock(&g_host_lock);
+  for (int i = 0; i < HOST_MAX_PENDING; i++) {
+    host_slot_t *s = &g_host_slots[i];
+    if (s->state != 1) continue;
+    s->state = 2;                       /* 已取走：Node 侧不能再被别的 poll 抢到 */
+    char *esc_name = (char *)malloc(HOST_NAME_LEN * 2);
+    char *esc_args = (char *)malloc(HOST_ARGS_LEN * 2);
+    if (esc_name == NULL || esc_args == NULL) {
+      free(esc_name);
+      free(esc_args);
+      pthread_mutex_lock(&s->lock);
+      s->state = 3;
+      s->status = -1;
+      s->result = NULL;
+      pthread_cond_signal(&s->cond);
+      pthread_mutex_unlock(&s->lock);
+      set_error("宿主桥：内存不足（转义缓冲）");
+      break;
+    }
+    host_json_escape(s->name, esc_name, HOST_NAME_LEN * 2);
+    host_json_escape(s->args != NULL ? s->args : "", esc_args, HOST_ARGS_LEN * 2);
+    snprintf(out, out_cap, "{\"id\":%ld,\"name\":\"%s\",\"args\":\"%s\"}",
+             s->id, esc_name, esc_args);
+    free(esc_name);
+    free(esc_args);
+    break;
+  }
+  pthread_mutex_unlock(&g_host_lock);
+  napi_value ret;
+  napi_create_string_utf8(env, out, NAPI_AUTO_LENGTH, &ret);
+  free(out);
+  return ret;
+}
+
+/**
+ * completeHostRequest(id, resultJson) -> number
+ *   0  = 已回填；-1 = 没有这个 id（或不在「已取走」状态）
+ */
+static napi_value js_complete_host_request(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+  int64_t id = 0;
+  if (argc < 1 || napi_get_value_int64(env, argv[0], &id) != napi_ok) {
+    set_error("completeHostRequest：id 不是整数");
+    napi_value ret;
+    napi_create_int32(env, -1, &ret);
+    return ret;
+  }
+  char result[HOST_RESULT_LEN];
+  if (get_str_arg(env, argv, argc, 1, result, sizeof(result), "resultJson") != 0) {
+    napi_value ret;
+    napi_create_int32(env, -1, &ret);
+    return ret;
+  }
+  host_slots_init();
+  int rc = -1;
+  pthread_mutex_lock(&g_host_lock);
+  for (int i = 0; i < HOST_MAX_PENDING; i++) {
+    host_slot_t *s = &g_host_slots[i];
+    if (s->state == 2 && s->id == (long)id) {
+      /* 条件变量必须与等待方用**同一把锁**：先拿 slot->lock 再改状态 + signal，
+         否则等待线程可能错过唤醒，只能干等到 15 s 超时。 */
+      pthread_mutex_lock(&s->lock);
+      s->result = strdup(result);
+      s->status = s->result != NULL ? 0 : -1;
+      s->state = 3;
+      pthread_cond_signal(&s->cond);
+      pthread_mutex_unlock(&s->lock);
+      rc = 0;
+      break;
+    }
+  }
+  pthread_mutex_unlock(&g_host_lock);
+  napi_value ret;
+  napi_create_int32(env, rc, &ret);
+  return ret;
+}
+
+/**
+ * callHost(name, argsJson) -> string
+ *
+ * **只在 Node 的 JS 线程上调用**（由 `payload/host.js#setTransport` 注册的传输函数使用）。
+ * 阻塞等待 ArkTS 侧回填，超时抛错。
+ */
+static napi_value js_call_host(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+  char name[HOST_NAME_LEN];
+  char args[HOST_ARGS_LEN];
+  if (get_str_arg(env, argv, argc, 0, name, sizeof(name), "name") != 0) {
+    napi_throw_error(env, NULL, "callHost: name 读取失败");
+    return NULL;
+  }
+  if (get_str_arg(env, argv, argc, 1, args, sizeof(args), "argsJson") != 0) {
+    napi_throw_error(env, NULL, "callHost: argsJson 读取失败");
+    return NULL;
+  }
+  host_slots_init();
+
+  host_slot_t *slot = NULL;
+  pthread_mutex_lock(&g_host_lock);
+  for (int i = 0; i < HOST_MAX_PENDING; i++) {
+    if (g_host_slots[i].state == 0) { slot = &g_host_slots[i]; break; }
+  }
+  if (slot == NULL) {
+    pthread_mutex_unlock(&g_host_lock);
+    set_error("宿主桥：并发槽位已满（上限 %d）", HOST_MAX_PENDING);
+    napi_throw_error(env, NULL, "callHost: host-busy（并发上限 4）");
+    return NULL;
+  }
+  slot->state = 1;
+  slot->id = g_host_next_id++;
+  snprintf(slot->name, sizeof(slot->name), "%s", name);
+  free(slot->args);
+  slot->args = strdup(args);
+  free(slot->result);
+  slot->result = NULL;
+  slot->status = 0;
+  long my_id = slot->id;
+  pthread_mutex_unlock(&g_host_lock);
+
+  /* 等 ArkTS 回填：绝对时刻截止，避免信号打断导致永久等待 */
+  struct timespec deadline;
+  clock_gettime(CLOCK_REALTIME, &deadline);
+  deadline.tv_sec += HOST_TIMEOUT_MS / 1000;
+  deadline.tv_nsec += (HOST_TIMEOUT_MS % 1000) * 1000000L;
+  if (deadline.tv_nsec >= 1000000000L) { deadline.tv_sec += 1; deadline.tv_nsec -= 1000000000L; }
+
+  pthread_mutex_lock(&slot->lock);
+  int timed_out = 0;
+  while (slot->state != 3) {
+    int wrc = pthread_cond_timedwait(&slot->cond, &slot->lock, &deadline);
+    if (wrc == ETIMEDOUT) { timed_out = 1; break; }
+  }
+  pthread_mutex_unlock(&slot->lock);
+
+  char *result = slot->result;
+  int status = slot->status;
+  pthread_mutex_lock(&g_host_lock);
+  slot->state = 0;
+  slot->result = NULL;                  /* 所有权转给本函数的返回值 */
+  pthread_mutex_unlock(&g_host_lock);
+
+  if (timed_out) {
+    g_host_timeouts++;
+    set_error("宿主桥：%s 超时 %d ms（ArkTS 侧未轮询或 dispatch 未返回）", name, HOST_TIMEOUT_MS);
+    free(result);
+    char msg[256];
+    snprintf(msg, sizeof(msg),
+             "callHost: host-timeout（%s 在 %d ms 内没有回填；ArkTS 侧轮询是否在跑？）",
+             name, HOST_TIMEOUT_MS);
+    napi_throw_error(env, NULL, msg);
+    return NULL;
+  }
+  if (status != 0 || result == NULL) {
+    free(result);
+    napi_throw_error(env, NULL, "callHost: host-error（ArkTS 侧 dispatch 抛异常）");
+    return NULL;
+  }
+  g_host_calls++;
+  napi_value ret;
+  napi_create_string_utf8(env, result, NAPI_AUTO_LENGTH, &ret);
+  free(result);
+  (void)my_id;
+  return ret;
+}
 /* --------------------------------------------------------- NAPI 接口 ---- */
 
 /**
@@ -1276,9 +1553,33 @@ static napi_value Init(napi_env env, napi_value exports) {
     {"version", NULL, js_version, NULL, NULL, NULL, napi_default, NULL},
     {"lastError", NULL, js_last_error, NULL, NULL, NULL, napi_default, NULL},
     {"stage", NULL, js_stage, NULL, NULL, NULL, napi_default, NULL},
+    /* Phase 2 宿主桥传输（方向：Node JS 线程 → ArkTS 主线程；轮询式，见上方长注释） */
+    {"pollHostRequest", NULL, js_poll_host_request, NULL, NULL, NULL, napi_default, NULL},
+    {"completeHostRequest", NULL, js_complete_host_request, NULL, NULL, NULL, napi_default, NULL},
+    {"callHost", NULL, js_call_host, NULL, NULL, NULL, napi_default, NULL},
   };
   napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
   return exports;
 }
 
 NAPI_MODULE(node_bridge, Init)
+/*
+ * ## ⛔ 已知不可行（2026-10-17 实测，行动项 E18）
+ *
+ * 曾尝试导出 `napi_register_module_v1` 让 Node 的 `process.dlopen` 直接调用本 .so
+ * （这样 Node 侧就能拿到 `callHost`）。结论：**不可行，且会崩掉整个应用进程**。
+ *
+ * 原因（**两套 NAPI 实现的 ABI 不兼容**）：
+ *   · 本 .so 编译时链的是 OHOS 的 `libace_napi`，`napi_define_properties` 等符号解析到**那一套**；
+ *   · Node 的 `DLOpen` 用**自己的 env** 调进来后，我们再去调 `napi_define_properties`，
+ *     等于把 OHOS NAPI 的实现作用在 Node 的对象上 ⇒ 未定义行为（真机：进程静默消失，
+ *     `pidof` 为空、无 `last-crash.json`）；
+ *   · 反过来，不导出该符号时 Node 只会报 `Module did not self-register`（可捕获、不崩）。
+ *
+ * ⇒ 要让 Node 拿到原生入口，必须**另建一个用 Node 头文件编译、符号解析到 `libnode.so`**
+ *   的 addon（`libnode_host_client.so`），或改用纯 JS 传输（FIFO/文件信箱）。
+ *   两条路都没做；详见 `pi-desktop-ark/docs/001-能力复刻评估.md` §K.9 E18。
+ *
+ * 因此本文件**只**保留 ArkTS 侧可用的三个符号（pollHostRequest / completeHostRequest / callHost），
+ * Node 侧传输保持 `transport-unavailable`（如实记录，不假装接线）。
+ */

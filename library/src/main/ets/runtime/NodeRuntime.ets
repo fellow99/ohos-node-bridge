@@ -255,8 +255,15 @@ export class NodeRuntime {
       : (readonlyRoot.length > 0 ? readonlyRoot : payloadRoot);
     const cwd: string = options.cwd !== undefined ? options.cwd : runRoot;
 
-    const envPairs: string = NodeRuntime.buildEnvPairs(payloadRoot, entry, options.archive,
+    const basePairs: string = NodeRuntime.buildEnvPairs(payloadRoot, entry, options.archive,
       options.archiveSha256, readonlyRoot, cwd, options.env);
+    /*
+     * `NODE_BRIDGE_LIBDIR` 是**库自己的**键：Node 侧要 `process.dlopen` 加载同一个
+     * `libnode_bridge.so`（宿主桥的 Node→原生入口），而 Node 无法从进程环境推出 HAP 的 libs 目录。
+     * 放在用户 env 之后 ⇒ 库拥有该键，应用不能覆盖（与其它 NODE_BRIDGE_* 同口径）。
+     */
+    const envPairs: string = (basePairs.length === 0 ? '' : basePairs + '\n')
+      + 'NODE_BRIDGE_LIBDIR=' + libDir;
 
     // 快照「实际生效参数」供事后读回（FR-001-020）
     this.options = NodeRuntime.snapshot(options, script, entry, payloadRoot, readonlyRoot, flags,
@@ -267,12 +274,24 @@ export class NodeRuntime {
 
     if (options.onLog !== undefined && !this.onLogWarned) {
       this.onLogWarned = true;
-      Logger.warn('NodeRuntimeOptions.onLog 未实现：进程内 Node → ArkTS 没有反向推送通道'
-        + '（Phase 2 才有宿主桥的 napi_threadsafe_function 队列，规划 §5.4）。日志不会丢，'
-        + '请用 logs() 主动读 ' + logPath + ' 的尾部；本次忽略该回调（不静默）。');
+      Logger.warn('NodeRuntimeOptions.onLog 未实现：**推送**通道仍未提供（传输层已可用，但方向是'
+        + 'Node 调 ArkTS 的请求/响应，不是日志流；要做日志推送得再加一条订阅式通道）。'
+        + '日志不会丢，请用 logs() 主动读 ' + logPath + ' 的尾部；本次忽略该回调（不静默）。');
     }
 
     this.setState(NodeState.STARTING, '已投递启动参数');
+
+    /*
+     * 传输泵必须在 `nodeBridge.start` **之前**起来：载荷在启动早期就会 `host.invoke()`
+     * （物化 agent 资源后的自检、`runtime.facts` 探针）。泵晚起 ⇒ 那些早期调用只能等 15 s 超时。
+     */
+    try {
+      const pumpState: string = this.host.startTransport(100);
+      Logger.info('host-bridge 传输泵：' + pumpState);
+    } catch (e) {
+      Logger.warn('host-bridge 传输泵启动失败（宿主能力将不可达，但不阻断 Node 启动）：'
+        + Logger.describeThrown(e));
+    }
 
     let rc: number = 0;
     try {
@@ -558,6 +577,12 @@ export class NodeRuntime {
       Logger.warn('shutdown 已记录（reason=' + reason + '）：进程内 Node **无法优雅停止** ——'
         + 'node::Start 不返回，只有整个进程退出才算停；Node 侧 onShutdown 钩子 Phase 2 经宿主桥提供。'
         + '本次不做任何实际关停。');
+      // 传输泵随状态一起停：Node 已经不在了，继续轮询只会空转
+      try {
+        this.host.stopTransport();
+      } catch (e) {
+        Logger.warn('shutdown 停传输泵失败（忽略）：' + Logger.describeThrown(e));
+      }
       return Promise.resolve();
     }
     if (this.state === NodeState.FAILED || this.state === NodeState.STOPPED) {
