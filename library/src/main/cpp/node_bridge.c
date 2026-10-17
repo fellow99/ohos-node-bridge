@@ -220,50 +220,85 @@ static void log_line(const char *fmt, ...) {
 
 /* ----------------------------------------------------------- SIGSYS shim ---- */
 
+/* SIGSYS 诊断限流：只写前若干条，避免信号风暴把自己的日志刷爆 */
+static volatile int g_sigsys_anomaly_logged = 0;
+/* 页大小掩码（在 install_sigsys_shim 里缓存；默认按 4 KB 起步） */
+static uintptr_t g_page_mask = 0xFFFu;
+
 static void sigsys_handler(int sig, siginfo_t *si, void *uc_) {
   (void)sig;
   (void)si;
   ucontext_t *uc = (ucontext_t *)uc_;
-  /* 判据：读指令编码 0xd4000001（svc #0）。用 PC 与 si_addr 比较在部分设备上恒不相等 ⇒ shim 静默失效 */
-  uint32_t insn = *(uint32_t *)uc->uc_mcontext.pc;
-  const int is_svc = (insn == 0xd4000001u);
-
-  /* 必须返回**正好 -1**：返回 -ENOSYS(-38) 会让 libuv uv__close(-38) 触发 assert(fd > STDERR_FILENO) */
-  uc->uc_mcontext.regs[0] = (uint64_t)-1;
-  uc->uc_mcontext.pc += 4;
+  const uintptr_t pc = (uintptr_t)uc->uc_mcontext.pc;
 
   /*
-   * ⚠️ 「无论如何都推进 PC」不是可选项：若某条 SIGSYS 对应的指令不是 `svc #0`
-   *（理论上不该发生，但野 PC 或别的 trap 源都可能），原地 return 会让**同一条指令被无限重投** ⇒ 活锁，
-   * 表现为「启动卡死且没有任何输出」—— 最难查的一类故障。这里按「视为 ENOSYS」处理，
-   * 并留下一条裸写诊断（只用 write/strlen，均为异步信号安全函数），把「发生了不该发生的事」变成可搜到的日志。
+   * `svc #0` = 0xd4000001。
+   *
+   * ⚠️ 真机实测（HAD-W32 / HarmonyOS 6.1.0 / API 26 / 2026-10-17）：本设备在 seccomp SIGSYS 时
+   *    保存的 `uc_mcontext.pc` **已经指向 svc 之后** —— 在 `pc` 处读到的是 `0x1402f4b2`（一条 `b`
+   *    指令），而不是 svc。故判据必须同时探测 `pc` 与 `pc-4`：
+   *      · 任一位置命中 svc ⇒ 这是被拦截的系统调用：x0 = **正好 -1**
+   *        （返回 -ENOSYS(-38) 会让 libuv `uv__close(-38)` 触发 `assert(fd > STDERR_FILENO)`），
+   *        并保证 PC 越过该指令；
+   *      · 两处都不是 svc ⇒ **寄存器与 PC 一律不动**。
+   *        上一版为防「活锁」无条件 `pc += 4` + `x0 = -1`，在真机上会**跳掉一条真实指令**，
+   *        后果是执行流错位：有代码把 x0 里的 -1 当作指针传进 `strlen`
+   *        ⇒ `SIGSEGV@0xffffffffffffffe0`，整个应用进程 abort（已实测复现并定位）。
+   *        活锁在此不成立：handler 返回后内核按 x0 的值继续执行，不会重投同一条指令。
    */
-  if (!is_svc) {
+  const uint32_t at_pc = *(const uint32_t *)pc;
+  const int at_svc = (at_pc == 0xd4000001u);
+
+  int before_svc = 0;
+  uint32_t before_pc = 0;
+  if (!at_svc && (pc & g_page_mask) >= 4u) {
+    before_pc = *(const uint32_t *)(pc - 4u);  /* 不跨页才读 */
+    before_svc = (before_pc == 0xd4000001u);
+  }
+
+  if (at_svc) {
+    uc->uc_mcontext.regs[0] = (uint64_t)-1;
+    uc->uc_mcontext.pc = pc + 4u;
+    return;
+  }
+  if (before_svc) {
+    uc->uc_mcontext.regs[0] = (uint64_t)-1;
+    return;  /* PC 已在 svc 之后：保持不动，只补返回值 */
+  }
+
+  /*
+   * 两处都不是 svc：不改 x0 也不改 PC（理由见上），只留一条**可搜**的诊断。
+   * 行格式必须与 §1.3 冻结契约一致：`sys <epochMs> [node_bridge] …`，且整行一次 write
+   * （O_APPEND 只保证单次 write 原子）。限流 4 条，避免信号风暴刷爆日志。
+   */
+  if (g_sigsys_anomaly_logged < 4) {
+    g_sigsys_anomaly_logged += 1;
     int fd = g_log_fd >= 0 ? g_log_fd : open_log_fd();
     if (fd >= 0) {
-      /*
-       * A4：必须与 §1.3 的冻结行格式一致 —— `sys <epochMs> <text>`，且 text 以
-       * `[node_bridge] ` 开头。旧写法 `sys SIGSYS non-svc …` 既没有 epochMs 也不带前缀，
-       * ArkTS 解析器与 tests/lib/log-format.mjs 都会把它归为「无法解析」——
-       * 偏偏这行是排查最难那类故障（shim 当场失效）的唯一现场，丢时间戳等于丢证据。
-       */
       char line[256];
       size_t len = 0;
       line[0] = 0;
       len = lb_append(line, sizeof(line), len, STREAM_SYS " ");
       len = lb_append_dec(line, sizeof(line), len, (unsigned long long)now_ms());
-      len = lb_append(line, sizeof(line), len, " [node_bridge] SIGSYS non-svc insn pc=");
-      len = lb_append_hex(line, sizeof(line), len, (unsigned long long)uc->uc_mcontext.pc - 4ULL);
+      len = lb_append(line, sizeof(line), len, " [node_bridge] SIGSYS unclassified pc=");
+      len = lb_append_hex(line, sizeof(line), len, (unsigned long long)pc);
       len = lb_append(line, sizeof(line), len, " insn=");
-      len = lb_append_hex(line, sizeof(line), len, (unsigned long long)insn);
-      len = lb_append(line, sizeof(line), len, " treated-as-ENOSYS pc-advanced\n");
-      raw_write_fd(fd, line, len);  /* A5：整行一次 write（O_APPEND 只保证单次 write 原子） */
+      len = lb_append_hex(line, sizeof(line), len, (unsigned long long)at_pc);
+      len = lb_append(line, sizeof(line), len, " prev=");
+      len = lb_append_hex(line, sizeof(line), len, (unsigned long long)before_pc);
+      len = lb_append(line, sizeof(line), len, " left-untouched\n");
+      raw_write_fd(fd, line, len);
       if (g_log_fd < 0) close(fd);
     }
   }
 }
 
 static void install_sigsys_shim(void) {
+  /* 缓存页大小：信号上下文里不能调 sysconf（非异步信号安全），故在此取一次。
+   * 用途见 sigsys_handler —— 探测 `pc-4` 前必须先确认不跨页（跨页读会二次 SIGSEGV 丢证据）。 */
+  long ps = sysconf(_SC_PAGESIZE);
+  if (ps > 0) g_page_mask = (uintptr_t)ps - 1u;
+
   struct sigaction sa;
   memset(&sa, 0, sizeof(sa));
   sa.sa_sigaction = sigsys_handler;
@@ -409,12 +444,23 @@ static volatile int g_drop_notice_done = 0;
 static volatile int g_first_node_line_seen = 0;
 
 /*
- * 判据刻意收窄到两种**明确的组件路径/名字**：`arkweb/chromium_ext` 与 `chromium`。
- * 不做模糊匹配 —— 过滤错了会吞掉载荷自己的日志，比脏日志更糟（C2）。
+ * 组件原生行的判据。
+ * ⚠️ 真机实测（HAD-W32 / 2026-10-17）：CEF/ArkWeb 的原生输出**全部以 `[../../` 开头**
+ * （`[../../cef/ohos_cef_ext/…`、`[../../chrome/browser/…`、`[../../content/…`、
+ * `[../../ohos_nweb/…`、`[../../arkweb/chromium_ext/…`），而最初只匹配 `arkweb/chromium_ext`
+ * 与 `chromium` 两种子串 ⇒ 绝大多数组件行**照旧落进 node.log**（真机已确认）。
+ * 判据扩展为：去掉可选前导空白后以 `[../../` 开头，或含 `libcef`/`chromium`/`arkweb`/`ohos_nweb`。
+ * 仍**不做模糊匹配**：`../../` 只有在「行首 + `[`」时才算 —— 载荷自己的栈帧里出现的相对路径
+ * 不会以 `[../../` 开头，因此不会被误吞（吞掉载荷日志比脏日志更糟，C2）。
  */
 static int is_arkweb_native_line(const char *line) {
-  if (strstr(line, "arkweb/chromium_ext") != NULL) return 1;
+  const char *s = line;
+  while (*s == ' ' || *s == '\t') s++;
+  if (s[0] == '[' && s[1] == '.' && s[2] == '.' && s[3] == '/' && s[4] == '.' && s[5] == '.') return 1;
+  if (strstr(line, "libcef") != NULL) return 1;
   if (strstr(line, "chromium") != NULL) return 1;
+  if (strstr(line, "arkweb") != NULL) return 1;
+  if (strstr(line, "ohos_nweb") != NULL) return 1;
   return 0;
 }
 
@@ -636,7 +682,10 @@ static void *bootstrap(void *arg) {
     errno = 0;
     long rc = syscall(425 /*__NR_io_uring_setup*/, 8u, params);
     int probe_errno = errno;
-    if (rc >= 0) close((int)rc);
+    /* 只关「像真 fd」的返回值：实测本机 `io_uring_setup` 返回 **0**（errno=0），
+     * 而 fd 0 是已重定向的 stdin —— 无条件 close 会把 stdin 关掉（虽指向 /dev/null，
+     * 无害但属没来由的副作用）。rc <= 2 一律不关。 */
+    if (rc > 2) close((int)rc);
     /* A9：shim 在探针**之前**已装好（install_sigsys_shim 在上方），所以 rc<0 并不能证明
      * 「shim 生效」—— 内核也可能直接返回 ENOSYS/EPERM。只如实标注「探针前已装甲」+ 原始 rc/errno。 */
     log_line("[node_bridge] io_uring_setup(425) -> %ld (errno=%d) shim=%s", rc, probe_errno,
