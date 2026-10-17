@@ -1264,24 +1264,27 @@ static napi_value js_complete_host_request(napi_env env, napi_callback_info info
 }
 
 /**
- * callHost(name, argsJson) -> string
+ * `pi_host_call` —— 阻塞式宿主调用的**纯 C 实现**（`__attribute__((visibility("default")))`
+ * 是为了让**另一个** .so（`libnode_host_client.so`，Node 侧 addon）能用 `dlsym` 找到它）。
  *
- * **只在 Node 的 JS 线程上调用**（由 `payload/host.js#setTransport` 注册的传输函数使用）。
- * 阻塞等待 ArkTS 侧回填，超时抛错。
+ * 为什么拆出来：Node 的 addon 不能链接 `libace_napi`（那是 OHOS 的 NAPI 实现，与 Node 的
+ * ABI 不兼容，真机实测会崩进程），所以 Node 侧那个 .so **只**做两件事：
+ *   ① 用 Node 的 env 暴露 `callHost`；② 通过 `dlsym(RTLD_DEFAULT,"pi_host_call")` 把活转给这里。
+ * 槽位表只有一份，两个 env 因此共享同一套请求/回填语义。
+ *
+ * @returns `0` 成功（结果写入 `out`）；`-1` 参数非法；`-2` 超长；`-3` 超时；`-4` 处理异常；`-5` 槽位已满
  */
-static napi_value js_call_host(napi_env env, napi_callback_info info) {
-  size_t argc = 2;
-  napi_value argv[2];
-  napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
-  char name[HOST_NAME_LEN];
-  char args[HOST_ARGS_LEN];
-  if (get_str_arg(env, argv, argc, 0, name, sizeof(name), "name") != 0) {
-    napi_throw_error(env, NULL, "callHost: name 读取失败");
-    return NULL;
+__attribute__((visibility("default")))
+int pi_host_call(const char *name, const char *args, char *out, size_t cap) {
+  if (name == NULL || args == NULL || out == NULL || cap == 0) return -1;
+  out[0] = 0;
+  if (strlen(name) >= HOST_NAME_LEN) {
+    set_error("pi_host_call：name 超长（上限 %d 字节）", HOST_NAME_LEN - 1);
+    return -2;
   }
-  if (get_str_arg(env, argv, argc, 1, args, sizeof(args), "argsJson") != 0) {
-    napi_throw_error(env, NULL, "callHost: argsJson 读取失败");
-    return NULL;
+  if (strlen(args) >= HOST_ARGS_LEN) {
+    set_error("pi_host_call：args 超长（上限 %d 字节）", HOST_ARGS_LEN - 1);
+    return -2;
   }
   host_slots_init();
 
@@ -1293,8 +1296,7 @@ static napi_value js_call_host(napi_env env, napi_callback_info info) {
   if (slot == NULL) {
     pthread_mutex_unlock(&g_host_lock);
     set_error("宿主桥：并发槽位已满（上限 %d）", HOST_MAX_PENDING);
-    napi_throw_error(env, NULL, "callHost: host-busy（并发上限 4）");
-    return NULL;
+    return -5;
   }
   slot->state = 1;
   slot->id = g_host_next_id++;
@@ -1304,10 +1306,9 @@ static napi_value js_call_host(napi_env env, napi_callback_info info) {
   free(slot->result);
   slot->result = NULL;
   slot->status = 0;
-  long my_id = slot->id;
   pthread_mutex_unlock(&g_host_lock);
 
-  /* 等 ArkTS 回填：绝对时刻截止，避免信号打断导致永久等待 */
+  /* 绝对时刻截止：信号打断也不会变成永久等待 */
   struct timespec deadline;
   clock_gettime(CLOCK_REALTIME, &deadline);
   deadline.tv_sec += HOST_TIMEOUT_MS / 1000;
@@ -1324,32 +1325,76 @@ static napi_value js_call_host(napi_env env, napi_callback_info info) {
 
   char *result = slot->result;
   int status = slot->status;
+  long id = slot->id;
   pthread_mutex_lock(&g_host_lock);
   slot->state = 0;
-  slot->result = NULL;                  /* 所有权转给本函数的返回值 */
+  slot->result = NULL;                  /* 所有权转给本函数 */
   pthread_mutex_unlock(&g_host_lock);
 
   if (timed_out) {
     g_host_timeouts++;
     set_error("宿主桥：%s 超时 %d ms（ArkTS 侧未轮询或 dispatch 未返回）", name, HOST_TIMEOUT_MS);
     free(result);
-    char msg[256];
-    snprintf(msg, sizeof(msg),
-             "callHost: host-timeout（%s 在 %d ms 内没有回填；ArkTS 侧轮询是否在跑？）",
-             name, HOST_TIMEOUT_MS);
-    napi_throw_error(env, NULL, msg);
-    return NULL;
+    return -3;
   }
   if (status != 0 || result == NULL) {
     free(result);
-    napi_throw_error(env, NULL, "callHost: host-error（ArkTS 侧 dispatch 抛异常）");
+    set_error("宿主桥：%s 的 ArkTS handler 抛异常（id=%ld）", name, id);
+    return -4;
+  }
+  size_t need = strlen(result);
+  if (need + 1 > cap) {
+    /* 超出调用方缓冲：**显式失败**，不返回半截 JSON（半截 JSON 比失败更难查） */
+    set_error("宿主桥：%s 的结果 %zu 字节超过调用方缓冲 %zu 字节", name, need, cap);
+    free(result);
+    return -2;
+  }
+  memcpy(out, result, need + 1);
+  free(result);
+  g_host_calls++;
+  return 0;
+}
+
+/**
+ * callHost(name, argsJson) -> string
+ *
+ * ArkTS 侧亦可调（当前无人使用）；Node 侧真正的入口在 `libnode_host_client.so`。
+ * 失败一律抛错（`host-timeout` / `host-busy` / `host-error` / `host-args-too-large`）。
+ */
+static napi_value js_call_host(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+  char name[HOST_NAME_LEN];
+  char args[HOST_ARGS_LEN];
+  if (get_str_arg(env, argv, argc, 0, name, sizeof(name), "name") != 0) {
+    napi_throw_error(env, NULL, "callHost: name 读取失败");
     return NULL;
   }
-  g_host_calls++;
+  if (get_str_arg(env, argv, argc, 1, args, sizeof(args), "argsJson") != 0) {
+    napi_throw_error(env, NULL, "callHost: argsJson 读取失败");
+    return NULL;
+  }
+  char *out = (char *)malloc(HOST_RESULT_LEN);
+  if (out == NULL) {
+    napi_throw_error(env, NULL, "callHost: 内存不足");
+    return NULL;
+  }
+  int rc = pi_host_call(name, args, out, HOST_RESULT_LEN);
+  if (rc != 0) {
+    free(out);
+    char msg[192];
+    const char *kind = rc == -3 ? "host-timeout"
+                     : rc == -5 ? "host-busy"
+                     : rc == -2 ? "host-args-too-large"
+                     : "host-error";
+    snprintf(msg, sizeof(msg), "callHost: %s（%s，rc=%d；ArkTS 侧轮询是否在跑？）", kind, name, rc);
+    napi_throw_error(env, NULL, msg);
+    return NULL;
+  }
   napi_value ret;
-  napi_create_string_utf8(env, result, NAPI_AUTO_LENGTH, &ret);
-  free(result);
-  (void)my_id;
+  napi_create_string_utf8(env, out, NAPI_AUTO_LENGTH, &ret);
+  free(out);
   return ret;
 }
 /* --------------------------------------------------------- NAPI 接口 ---- */

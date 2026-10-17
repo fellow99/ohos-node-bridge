@@ -23,3 +23,14 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY
 target_link_libraries(node_bridge PUBLIC libace_napi.z.so libhilog_ndk.z.so)
 
 target_compile_definitions(node_bridge PRIVATE _GNU_SOURCE)
+
+# ── Node 侧宿主桥入口（行动项 E18 方案 A）────────────────────────────────────────
+# **刻意不链接 `libace_napi`**：napi_* 必须留作未定义符号，靠运行时已 dlopen 的
+# `libnode.so`（RTLD_GLOBAL）解析 —— 否则两套 NAPI 实现混用会崩掉整个进程（真机实测）。
+# 只导出 `napi_register_module_v1` + `callHost`；真正的阻塞逻辑在
+# `libnode_bridge.so` 的 `pi_host_call`（本文件用 dlsym 取）。
+add_library(node_host_client SHARED node_host_client.c)
+target_compile_definitions(node_host_client PRIVATE _GNU_SOURCE)
+# 允许未定义符号（napi_*）：OHOS 工具链默认 --no-undefined，而方案 A 的核心正是
+# 「napi_* 保持未定义、运行时由 libnode.so 解析」。`-z undefs` 是 LLD 的开关。
+target_link_options(node_host_client PRIVATE -Wl,-z,undefs)
