@@ -1,10 +1,61 @@
 import { buffer } from '@kit.ArkTS';
+/** 文件信箱的目录/文件操作（`@kit.CoreFileKit`；与 Node 侧 `node:fs` 同一份文件系统视图） */
+import { fileIo as fs } from '@kit.CoreFileKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 import nodeBridge from 'libnode_bridge.so';
 import { HostBridgeHandler } from '../runtime/Types';
 import { Logger } from '../log/Logger';
 
 /** 单次 JSON 载荷上限默认值：8 MiB（规划 §5.4 / 契约 §2.3 `capBytes`） */
 const DEFAULT_CAP_BYTES: number = 8 * 1024 * 1024;
+
+// ── 文件信箱传输的常量（与 Node 侧 `payload/host.js` 逐项同口径）───────────────
+/** 请求文件后缀（Node 写、本类消费） */
+const MAILBOX_REQ: string = '.req';
+/** 临时后缀（先写它再 rename，保证读方只看到完整的 JSON） */
+const MAILBOX_TMP: string = '.tmp';
+/** 处理中后缀（`.req` rename 成它 = 「取走」；崩在这里能从文件名看出「谁在处理」） */
+const MAILBOX_WIP: string = '.wip';
+/** 成功结果后缀 */
+const MAILBOX_DONE: string = '.done';
+/** 失败结果后缀 */
+const MAILBOX_FAIL: string = '.fail';
+/** 心跳文件名（落在信箱目录内；列目录时靠后缀过滤，不会被当成请求） */
+const MAILBOX_HEARTBEAT: string = 'heartbeat.log';
+/** 心跳文件轮转阈值：超过就整体重写（长期运行不能无限增长） */
+const MAILBOX_HEARTBEAT_MAX_BYTES: number = 65536;
+/**
+ * 陈旧文件回收阈值：10 分钟。
+ *
+ * **必须大于一次合法调用的最长耗时**，否则会误删正在处理的请求。选 10 分钟的理由：
+ * 目前最长的是「用户手动选目录」（`fs.pickFolder`，可能几十秒到几分钟），10 分钟留足余量；
+ * 同时保证真卡死（写入方崩溃）时能在可接受时间内自愈。在飞的那一个另有豁免（见 mailboxReap）。
+ */
+const MAILBOX_STALE_MS: number = 600000;
+
+/**
+ * `.req` 文件的内容结构（Node 侧 `invokeViaMailbox` 写入）。
+ *
+ * `args` 是**已序列化的 JSON 文本**而不是嵌套对象：与原生通道的 `args` 字段同形，
+ * 两条传输交给 `dispatch()` 的都是同一种输入（否则 handler 要判两种形状）。
+ */
+class MailboxEnvelope {
+  name: string = '';
+  args: string = '{}';
+  /** 写入方 pid（诊断用：能一眼看出请求来自哪一个进程实例） */
+  pid: number = 0;
+  ts: number = 0;
+}
+
+/**
+ * `dispatch()` 的结构化失败形状（只取拆包需要的两个字段）。
+ *
+ * 与 `HostBridge.dispatch()` 的产出**同源**：`{"ok":false,"error":"<code>","detail":"…"}`。
+ */
+class DispatchFailure {
+  error: string = '';
+  detail: string = '';
+}
 
 /**
  * 原生层 `pollHostRequest()` 返回的请求结构（字段名与 `node_bridge.c` 的 snprintf 一致）。
@@ -19,16 +70,25 @@ class HostRequest {
 /**
  * 003-host-bridge —— Node ↔ ArkTS 双向调用。
  *
- * 传输层状态（2026-10-17，行动项 E18）：
- *   ① ✅ Node → ArkTS：`startTransport()` 起一个 100 ms 轮询泵，读原生 `pollHostRequest()`、
- *      dispatch 后 `completeHostRequest()` 回填。**刻意不用 `napi_threadsafe_function`**——
- *      它要在 ArkTS env 上创建，而 HarmonyOS ArkTS NAPI 对它的支持未经验证（见 `node_bridge.c` 长注释）。
- *   ② ✅ ArkTS → Node：原生 `callHost(name, argsJson)`，由 `payload/host.js#setTransport` 注册；
- *      Node 侧阻塞等回填，15 s 超时抛错。
- *   ③ ✅ 超时 15 s / 并发 4 / name 128 B / args 8 KB / result 64 KB，超限与超时都返回**结构化错误**。
+ * 传输层状态（2026-10-17，行动项 E18 —— 已换路并跑通）：
  *
- * 为什么不用旧壳的 `systemPreferences.callArkTSFunction`：那只支持「取一个偏好值」，不是能力调用（§2.2）。
- *
+ *   ① ✅ **Node → ArkTS：文件信箱（主路）**。`startMailbox(dir, 100)` 起一个 100 ms 轮询泵，
+ *      扫 `<dir>/*.req` → rename 成 `.wip`（取走）→ `dispatch()` → 写 `.done`/`.fail`。
+ *      换路的依据是**原生的两条路都实测不通**（不是没试）：
+ *        · 主桥 `.so` 已被 ArkTS 侧 import 进 **libace_napi**，Node 再 `require` 得到
+ *          `Module did not self-register`；导出 `napi_register_module_v1` 后 `napi_*`
+ *          绑到 libace_napi 的实现、却收到 Node 的 env ⇒ **整个应用进程静默消失**；
+ *        · 专用 addon 的 `DT_NEEDED` 缺 libnode ⇒ 6 个 `napi_*` 无人可解
+ *          （`napi_create_function: symbol not found`）。
+ *      文件信箱两侧同 UID、同文件系统视图，每个中间态都是可 `hdc shell cat` 的文件
+ *      ⇒ 失败可诊断；代价是 ≤100 ms 延迟，而宿主能力全是用户显式动作。
+ *   ② ⚠️ 原生槽位表（`startTransport` / `pollHostRequest` / `completeHostRequest`）**保留但不再是主路**：
+ *      它给 ArkTS **内部**留一条同进程通路，且已有编译与自检覆盖；拆掉没有收益，只会多一次回归面。
+ *      同理 `callHost`（Node→原生）保留给将来「专用 addon 补齐链接闭包」时用。
+ *   ③ ✅ 上限与失败语义不变：name 128 B / args 8 KB / result 64 KB（原生）；
+ *      信箱侧由 `dispatch()` 统一产出 `{"ok":false,"error":…}`，Node 侧 `invoke()` 原样上抛。
+ *   ④ ✅ 超时：信箱默认 15 s（`host.js#MAILBOX_TIMEOUT_MS`），可**逐次**放宽
+ *      （`fs.pickFolder` 这类由用户决定耗时的能力必须放宽，否则必然超时）。
  * **能力实现不在本库**（宪法 C1）：本类只做「寄存器 + 传输」；`CAPABILITIES` 仅用于诊断与自检。
  */
 export class HostBridge {
@@ -56,6 +116,22 @@ export class HostBridge {
   private pumpRounds: number = 0;
   private pumpDispatched: number = 0;
   private pumpErrors: number = 0;
+  // ── 文件信箱泵（E18 主路）的状态 ──────────────────────────────────────────
+  /** 信箱定时器句柄（-1 = 未启动） */
+  private mailboxTimer: number = -1;
+  /** 信箱目录（空串 = 未接线；由消费方给出） */
+  private mailboxDir: string = '';
+  private mailboxRounds: number = 0;
+  private mailboxDispatched: number = 0;
+  private mailboxErrors: number = 0;
+  private mailboxReaped: number = 0;
+  /**
+   * 正在处理的请求 id（空串 = 空闲）。
+   *
+   * 用途只有一个但很关键：陈旧回收**必须**放过在飞的那一个 —— 否则
+   * 「用户选了 8 分钟文件夹」会被 10 分钟的阈值之外的误删规则牵连（更别说将来把阈值调小）。
+   */
+  private mailboxInflight: string = '';
 
   /** 注册一个能力（同名覆盖） */
   register(name: string, handler: HostBridgeHandler): void {
@@ -121,6 +197,341 @@ export class HostBridge {
       + ' rounds=' + this.pumpRounds
       + ' dispatched=' + this.pumpDispatched
       + ' errors=' + this.pumpErrors;
+  }
+
+  // ── 文件信箱传输（E18 主路）：Node → ArkTS ──────────────────────────────────
+  //
+  // 协议与 Node 侧 `payload/host.js#invokeViaMailbox` 逐字对应：
+  //   Node 写 `<dir>/<id>.tmp` → rename → `<id>.req`
+  //   本类每 100 ms 扫一遍：`.req` → rename 成 `.wip`（取走即改名）→ dispatch()
+  //                        → 写 `<id>.tmp` → rename → `<id>.done` | `<id>.fail`
+  //   Node 读到结果后清掉五件套；本类只负责**回收无人认领的陈旧文件**（崩溃/断电残留）。
+  //
+  // 为什么这条是主路：原生传输的两条路都实测不通（见 `node_bridge.c` 长注释与
+  // `payload/host.js` 文件头）。文件信箱两侧同 UID、同文件系统视图，每个中间态都是
+  // 一个可 `hdc shell cat` 的文件 ⇒ 失败可诊断，而代价只是最多 100 ms 延迟
+  // （宿主能力全是用户显式动作，延迟不可感知）。
+  //
+  // 保留原生槽位表（`startTransport`）不动：它给 ArkTS **内部**留一条同进程通路，
+  // 且已通过编译与自检；拆掉它没有收益，只会多一次回归面。
+
+  /**
+   * 启动文件信箱泵（幂等：重复调用只返回当前状态）。
+   *
+   * 之所以**必须常驻**而不是用时才起：Node 侧写 `.req` 是**随时**可能发生的
+   * （扩展、钩子、启动期自检），桥没起来 ⇒ `.req` 堆在目录里没人处理 ⇒ Node 侧只能超时。
+   * 这与宿主侧「原生层只暴露三个函数、没有消息通道」是同一个约束的两种表达。
+   *
+   * @param dir 信箱目录（由**消费方**给出：库不解释沙箱路径，C1）
+   * @param intervalMs 轮询间隔（默认/下限都用 100 ms：10 Hz 对主机 CPU 可忽略）
+   * @returns 人读状态串（同时进日志）
+   */
+  startMailbox(dir: string, intervalMs: number): string {
+    if (this.mailboxTimer >= 0) {
+      return 'already-running:' + this.mailboxDir + ':' + this.mailboxDispatched + '/' + this.mailboxRounds;
+    }
+    if (typeof dir !== 'string' || dir.length === 0) {
+      Logger.warn('host-bridge: startMailbox 收到空目录 ⇒ 不启动（Node 侧会如实报 transport-unavailable）');
+      return 'refused:empty-dir';
+    }
+    let mkdirError: string = '';
+    try {
+      if (!fs.accessSync(dir)) {
+        fs.mkdirSync(dir);
+      }
+    } catch (e) {
+      const err = e as BusinessError;
+      mkdirError = err.message;
+    }
+    if (mkdirError.length > 0) {
+      // 建不出来就**不要**假装在跑：Node 侧写 .req 会失败并如实报 mailbox-write-failed
+      Logger.warn('host-bridge: 信箱目录不可用（' + dir + '）：' + mkdirError);
+      return 'refused:mkdir-failed:' + mkdirError;
+    }
+    this.mailboxDir = dir;
+    const iv: number = intervalMs > 0 ? intervalMs : 100;
+    this.mailboxTimer = setInterval(() => {
+      this.mailboxTick();
+    }, iv);
+    this.mailboxHeartbeat('started dir=' + dir + ' pollMs=' + iv);
+    Logger.info('host-bridge: 文件信箱泵已启动（' + dir + '，轮询 ' + iv
+      + ' ms；协议 .req → .wip → .done/.fail；陈旧回收 ' + (MAILBOX_STALE_MS / 1000) + ' s）');
+    return 'started:' + dir + ':' + iv + 'ms';
+  }
+
+  /** 停止文件信箱泵（幂等） */
+  stopMailbox(): void {
+    if (this.mailboxTimer < 0) {
+      return;
+    }
+    clearInterval(this.mailboxTimer);
+    this.mailboxTimer = -1;
+    this.mailboxHeartbeat('stopped rounds=' + this.mailboxRounds
+      + ' dispatched=' + this.mailboxDispatched + ' errors=' + this.mailboxErrors);
+    Logger.info('host-bridge: 文件信箱泵已停止（累计 ' + this.mailboxRounds
+      + ' 轮 / 分发 ' + this.mailboxDispatched + ' 次 / 错误 ' + this.mailboxErrors
+      + ' 次 / 回收 ' + this.mailboxReaped + ' 个陈旧文件）');
+  }
+
+  /** 信箱诊断串（诊断面板与 `/diag` 用；不含任何载荷内容） */
+  mailboxStats(): string {
+    return 'running=' + (this.mailboxTimer >= 0)
+      + ' dir=' + (this.mailboxDir.length > 0 ? this.mailboxDir : '(none)')
+      + ' rounds=' + this.mailboxRounds
+      + ' dispatched=' + this.mailboxDispatched
+      + ' errors=' + this.mailboxErrors
+      + ' reaped=' + this.mailboxReaped;
+  }
+
+  /**
+   * 一轮信箱轮询：回收陈旧 → 取一个 `.req` → dispatch → 写回结果。
+   *
+   * **绝不抛**：任何异常都写进 `.fail`（否则 Node 侧只能等到自己超时，
+   * 而"超时"与"处理器报错"是两件完全不同的事，混在一起就没法定位）。
+   *
+   * 一次只处理一个（串行）：宿主能力全是用户动作，串行让"上一单没清干净"不会互相干扰；
+   * 而 10 Hz 的轮询频率远高于人点按钮的频率。
+   */
+  private mailboxTick(): void {
+    this.mailboxRounds = this.mailboxRounds + 1;
+    const dir: string = this.mailboxDir;
+    if (dir.length === 0) {
+      return;
+    }
+    let names: string[] = [];
+    try {
+      names = fs.listFileSync(dir);
+    } catch (e) {
+      this.mailboxErrors = this.mailboxErrors + 1;
+      // 目录被删/不可读：只记一次，不要每 100 ms 刷屏
+      if (this.mailboxRounds % 100 === 1) {
+        Logger.warn('host-bridge: 列出信箱目录失败：' + Logger.describeThrown(e));
+      }
+      return;
+    }
+    this.mailboxReap(dir, names);
+    const reqs: string[] = names.filter((n: string): boolean => n.endsWith(MAILBOX_REQ)).sort();
+    if (reqs.length === 0) {
+      // 每 50 轮（≈5 s）刷一次存活心跳：回答"泵是否真在跑"，与"有没有请求"是两件事
+      if (this.mailboxRounds % 50 === 0) {
+        this.mailboxHeartbeat('alive rounds=' + this.mailboxRounds
+          + ' dispatched=' + this.mailboxDispatched + ' errors=' + this.mailboxErrors
+          + ' reaped=' + this.mailboxReaped + ' pending=' + names.filter((n: string): boolean => n.endsWith(MAILBOX_REQ)).length);
+      }
+      return;
+    }
+    const name: string = reqs[0];
+    const id: string = name.substring(0, name.length - MAILBOX_REQ.length);
+    const reqPath: string = dir + '/' + name;
+    let payload: string = '';
+    try {
+      payload = fs.readTextSync(reqPath);
+    } catch (e) {
+      return; // 下轮再试（可能正被 Node 侧写入，但那边是 .tmp+rename，理论不该发生）
+    }
+    /*
+     * 完整性判据：空串、或不以 `}` 结尾 ⇒ 内容还没写完，等下一轮。
+     *
+     * 这条**不能省**：`.req` 由 Node 侧 `rename` 发布（原子），但断电/磁盘满仍可能留下
+     * 半截文件；而一旦这种文件排到队首，本函数会每轮都返回、每轮都不处理它
+     * ⇒ 队首被永久占住（宿主侧的语音桥就踩过这个坑）。配套的两道保险是
+     * ① 陈旧回收覆盖 `.req`（见 mailboxReap）；② 这里只跳过、不消耗。
+     */
+    if (payload.length === 0 || !payload.endsWith('}')) {
+      return;
+    }
+    const wipPath: string = dir + '/' + id + MAILBOX_WIP;
+    try {
+      fs.renameSync(reqPath, wipPath);
+    } catch (e) {
+      return; // 被别的轮次抢走了（不该发生：单定时器），或目录刚被换掉
+    }
+    this.mailboxInflight = id;
+    this.mailboxDispatched = this.mailboxDispatched + 1;
+    let reqName: string = '';
+    let reqArgs: string = '{}';
+    try {
+      const parsed = JSON.parse(payload) as MailboxEnvelope;
+      reqName = typeof parsed.name === 'string' ? parsed.name : '';
+      reqArgs = typeof parsed.args === 'string' ? parsed.args : '{}';
+    } catch (e) {
+      this.mailboxErrors = this.mailboxErrors + 1;
+      this.mailboxWrite(dir, id, MAILBOX_FAIL, '{"ok":false,"error":"bad-request",'
+        + '"detail":"请求 JSON 无法解析"}');
+      this.mailboxFinish(dir, id);
+      this.mailboxHeartbeat('bad-request id=' + id);
+      return;
+    }
+    this.mailboxHeartbeat('got id=' + id + ' name=' + reqName + ' bytes=' + payload.length);
+    const result: string = this.dispatch(reqName, reqArgs);
+    /*
+     * 成功/失败都由 `dispatch()` 的 JSON 决定（`ok === false` 即失败）：
+     * 宿主侧只做字节搬运，不重复解释 —— 一处口径，两侧不会漂。
+     */
+    const ok: boolean = !HostBridge.isFailureJson(result);
+    const writeOk: boolean = ok
+      ? this.mailboxWrite(dir, id, MAILBOX_DONE, '{"ok":true,"result":"' + HostBridge.jsonEsc(result) + '"}')
+      : this.mailboxWrite(dir, id, MAILBOX_FAIL, HostBridge.mailboxFailBody(result));
+    if (!writeOk) {
+      this.mailboxErrors = this.mailboxErrors + 1;
+    }
+    this.mailboxFinish(dir, id);
+    this.mailboxHeartbeat('done id=' + id + ' ok=' + ok + ' writeOk=' + writeOk
+      + ' resultBytes=' + result.length);
+  }
+
+  /** 收尾：清掉 `.wip`（成功/失败都要清，否则它会一直占着"处理中"的语义） */
+  private mailboxFinish(dir: string, id: string): void {
+    try {
+      fs.unlinkSync(dir + '/' + id + MAILBOX_WIP);
+    } catch (e) {
+      // 忽略：陈旧回收兜底
+    }
+    this.mailboxInflight = '';
+  }
+
+  /**
+   * 原子写一个结果文件（`.tmp` → rename）。
+   *
+   * 直接写目标名会让 Node 侧读到"写了一半的 JSON" —— 它那侧对半截文件的处理是
+   * "下一轮再读"，看起来安全，但那会把一次成功退化成一次额外的 100 ms 延迟；
+   * 更重要的是**失败无法区分**（读到半截 vs 结果本就是空的）。
+   */
+  private mailboxWrite(dir: string, id: string, suffix: string, body: string): boolean {
+    const tmp: string = dir + '/' + id + MAILBOX_TMP;
+    const dest: string = dir + '/' + id + suffix;
+    try {
+      const f: fs.File = fs.openSync(tmp, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+      try {
+        fs.writeSync(f.fd, body);
+      } finally {
+        fs.closeSync(f);
+      }
+      fs.renameSync(tmp, dest);
+      return true;
+    } catch (e) {
+      Logger.warn('host-bridge: 写结果失败（' + dest + '）：' + Logger.describeThrown(e));
+      try {
+        fs.unlinkSync(tmp);
+      } catch (ignore) {
+        // 忽略
+      }
+      return false;
+    }
+  }
+
+  /**
+   * 回收陈旧文件（写入方或处理方已经死掉的残留）。
+   *
+   * **必须覆盖 `.req`**：只清 `.wip/.done/.fail` 的版本会让一个半截 `.req` 永久堵死队首
+   * （它既不满足完整性判据、又没人删它）—— 宿主侧的语音桥就是审核时发现这个真缺陷才补的。
+   *
+   * **跳过在处理的 `.wip`**：`fs.pickFolder` 这类能力的耗时由用户决定（可能几分钟），
+   * 而 mtime 阈值是按"最短合法耗时"定的；把在飞的那一个排除掉，就不必为了不误删而把
+   * 阈值调得很大（阈值越大，真卡死时的自愈越慢）。
+   */
+  private mailboxReap(dir: string, names: string[]): void {
+    const now: number = Date.now();
+    for (const n of names) {
+      if (!HostBridge.isMailboxFile(n)) {
+        continue;
+      }
+      const isWip: boolean = n.endsWith(MAILBOX_WIP);
+      if (isWip && this.mailboxInflight.length > 0
+        && n === this.mailboxInflight + MAILBOX_WIP) {
+        continue; // 正在处理，绝不回收
+      }
+      const p: string = dir + '/' + n;
+      try {
+        const st: fs.Stat = fs.statSync(p);
+        if (now - st.mtime * 1000 > MAILBOX_STALE_MS) {
+          fs.unlinkSync(p);
+          this.mailboxReaped = this.mailboxReaped + 1;
+          Logger.warn('host-bridge: 回收陈旧信箱文件（' + n + '，mtime ' + st.mtime + '）');
+          this.mailboxHeartbeat('reap ' + n);
+        }
+      } catch (e) {
+        // 忽略：下轮再试
+      }
+    }
+  }
+
+  /**
+   * 追加一行心跳。
+   *
+   * 为什么**每次结果都写**（而不只写"收到请求"）：只写请求时，事后无法区分
+   * 「处理成功」与「请求根本没被处理」—— 两者都停在最后一条 `got`/`alive` 上，
+   * 而这正是排查时最需要区分的一件事。
+   *
+   * 超过 64 KB 就整体重写：长期运行每 5 s 一行 ≈ 每天 1.7 万行，不能无限增长。
+   */
+  private mailboxHeartbeat(detail: string): void {
+    const dir: string = this.mailboxDir;
+    if (dir.length === 0) {
+      return;
+    }
+    const path: string = dir + '/' + MAILBOX_HEARTBEAT;
+    const line: string = new Date().toISOString() + ' ' + detail + '\n';
+    try {
+      let size: number = 0;
+      try {
+        size = fs.statSync(path).size;
+      } catch (e) {
+        size = 0;
+      }
+      const rotate: boolean = size > MAILBOX_HEARTBEAT_MAX_BYTES;
+      const f: fs.File = fs.openSync(path, rotate
+        ? (fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC)
+        : (fs.OpenMode.WRITE_ONLY | fs.OpenMode.CREATE | fs.OpenMode.APPEND));
+      try {
+        fs.writeSync(f.fd, rotate ? ('--- 超过 ' + MAILBOX_HEARTBEAT_MAX_BYTES + 'B，已轮转 ---\n' + line) : line);
+      } finally {
+        fs.closeSync(f);
+      }
+    } catch (e) {
+      // 心跳失败不影响主流程
+    }
+  }
+
+  /** 是否是信箱中间文件（心跳等其它文件不参与回收） */
+  private static isMailboxFile(name: string): boolean {
+    return name.endsWith(MAILBOX_REQ) || name.endsWith(MAILBOX_TMP)
+      || name.endsWith(MAILBOX_WIP) || name.endsWith(MAILBOX_DONE) || name.endsWith(MAILBOX_FAIL);
+  }
+
+  /** `dispatch()` 的返回串是否表示失败（只认顶层的 `"ok":false`，不解析嵌套） */
+  private static isFailureJson(result: string): boolean {
+    const trimmed: string = result.trim();
+    return trimmed.startsWith('{"ok":false') || trimmed.startsWith('{"ok": false');
+  }
+
+  /**
+   * 把 `dispatch()` 的结构化失败**拆包**成 `.fail` 的顶层字段。
+   *
+   * 为什么要拆：Node 侧把 `.fail` 的 `error` **原样**当成 `invoke()` 的 `err.error`。
+   * 若统一写成 `host-dispatch-failed`，调用方拿到的永远是这一句，真正的
+   * `unregistered` / `payload-too-large` / `handler-threw` 只能从 `detail` 里正则抠 ——
+   * 那是反模式（错误码本来就是为了让人按码分派）。
+   *
+   * 拆包失败（处理器返回了非 JSON）时才兜底成 `host-dispatch-failed`；
+   * 无论哪种情况，原始返回串都留在 `dispatch` 字段里，保证信息不丢。
+   */
+  private static mailboxFailBody(result: string): string {
+    let code: string = 'host-dispatch-failed';
+    let detail: string = result;
+    try {
+      const parsed = JSON.parse(result) as DispatchFailure;
+      if (typeof parsed.error === 'string' && parsed.error.length > 0) {
+        code = parsed.error;
+      }
+      if (typeof parsed.detail === 'string' && parsed.detail.length > 0) {
+        detail = parsed.detail;
+      }
+    } catch (e) {
+      // 非 JSON：整串进 detail（code 保持兜底值）
+    }
+    return '{"ok":false,"error":"' + HostBridge.jsonEsc(code) + '","detail":"'
+      + HostBridge.jsonEsc(detail) + '","dispatch":"' + HostBridge.jsonEsc(result) + '"}';
   }
 
   /**
