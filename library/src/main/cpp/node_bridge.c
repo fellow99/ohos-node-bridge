@@ -489,6 +489,119 @@ static void start_sigsys_watchdog(void) {
   }
 }
 
+/* --------------------------------------------- SIGSYS 主动自检（探针） ---- */
+/*
+ * 为什么要有主动自检：上面那个监视线程只能证明「我们能修」，**不能证明「我们被顶掉过」** ——
+ * 处置被顶掉的那一刻若恰好没有 SIGSYS 到达，故障链就仍然只是推断（真机上正是如此：
+ * `SIGSYS 处置被外部改写…` 一行**从未出现过**，于是「libuv 顶掉 shim」这件事一直没有证据）。
+ *
+ * 做法：在**确定的时刻**回读 `sigaction(SIGSYS, NULL, &cur)`，把「此刻信号路径上是谁」
+ * 变成一条可 grep 的 sys 行。采样点固定为五个（t=install / 0ms / 200ms / 1s / 3s），
+ * 不循环、不刷盘：
+ *   · 全是 ours ⇒ 处置在观测窗内**没有被外部改写**（那先前的推断链要另找解释）；
+ *   · 某个时刻 external(addr=…) ⇒ 我们在那之前就被顶掉了（这就是决定性证据）。
+ * 结论口径：**两种结果都算闭合**，缺的只是「有没有被改写」这个事实本身。
+ *
+ * 线程上下文：普通线程，`snprintf`/`log_line` 都可用（**不需要**信号安全，绝不放进 handler）。
+ * 「已重装」的处置路径与监视线程共用（`g_prev_sigsys` 留档 + `install_sigsys_shim()`），
+ * 不新增机制，避免出现第二套真相。
+ */
+static int g_sigsys_probe_samples = 0;              /* 已采样次数（汇总行用） */
+static int g_sigsys_probe_diffs = 0;                /* 发现差异的次数 */
+static const char *g_sigsys_probe_first = NULL;     /* 首次差异的时刻标签 */
+static int g_sigsys_probe_first_logged = 0;         /* 决定性的一行只发一次 */
+
+/* 处置的人读类别：ours / SIG_DFL / SIG_IGN / external */
+static const char *sigsys_action_kind(const struct sigaction *a) {
+  if (a == NULL) return "unknown";
+  if (sigsys_action_is_ours(a)) return "ours";
+  if (!(a->sa_flags & SA_SIGINFO)) {
+    if (a->sa_handler == SIG_DFL) return "SIG_DFL";
+    if (a->sa_handler == SIG_IGN) return "SIG_IGN";
+  }
+  return "external";
+}
+
+static void sigsys_selfcheck(const char *when) {
+  struct sigaction cur;
+  memset(&cur, 0, sizeof(cur));
+  if (sigaction(SIGSYS, NULL, &cur) != 0) {
+    log_line("[node_bridge] SIGSYS 自检 t=%s 回读失败 errno=%d", when, errno);
+    return;
+  }
+  g_sigsys_probe_samples += 1;
+  if (sigsys_action_is_ours(&cur)) {
+    log_line("[node_bridge] SIGSYS 自检 t=%s 处置=ours flags=%#x", when, (unsigned)cur.sa_flags);
+    return;
+  }
+  /*
+   * 不是 ours ⇒ **决定性证据**。只发一条（后续差异只计数，不刷日志）：
+   * addr 是「此刻占着 SIGSYS 的那个处置」——libuv 的 `uv__signal_handler` 会出现在这里。
+   */
+  const void *addr = (cur.sa_flags & SA_SIGINFO) ? (const void *)cur.sa_sigaction
+                                                 : (const void *)cur.sa_handler;
+  g_sigsys_probe_diffs += 1;
+  if (!g_sigsys_probe_first_logged) {
+    g_sigsys_probe_first_logged = 1;
+    g_sigsys_probe_first = when;
+    log_line("[node_bridge] SIGSYS 自检 t=%s 处置=%s(addr=%p) flags=%#x ⇒ 已重装",
+             when, sigsys_action_kind(&cur), addr, (unsigned)cur.sa_flags);
+  }
+  /* 与监视线程同一条路径：留档被顶掉的处置 + 装回 shim */
+  g_prev_sigsys = cur;
+  g_prev_sigsys_valid = 1;
+  install_sigsys_shim();
+  g_sigsys_rearms += 1;
+}
+
+static void probe_sleep_ms(long ms) {
+  struct timespec ts;
+  ts.tv_sec = ms / 1000;
+  ts.tv_nsec = (ms % 1000) * 1000000L;
+  nanosleep(&ts, NULL);
+}
+
+/*
+ * 探针线程：`node::Start()` 是**阻塞**的（一直跑到进程退出），所以「Start 之后 200 ms/1 s/3 s」
+ * 只能在另一个线程里数。t=0ms 这一次就是「Start 刚被调用」的时刻。
+ */
+static void *sigsys_probe_thread(void *arg) {
+  (void)arg;
+  sigsys_selfcheck("0ms");
+  probe_sleep_ms(200);
+  sigsys_selfcheck("200ms");
+  probe_sleep_ms(800);
+  sigsys_selfcheck("1s");
+  probe_sleep_ms(2000);
+  sigsys_selfcheck("3s");
+  if (g_sigsys_probe_diffs == 0) {
+    log_line("[node_bridge] SIGSYS 自检汇总 t=3s 采样=%d 差异=0 处置=ours（观测窗内未被外部改写；"
+             "期间监视线程 rearm=%d 次）",
+             g_sigsys_probe_samples, g_sigsys_rearms);
+  } else {
+    log_line("[node_bridge] SIGSYS 自检汇总 t=3s 采样=%d 差异=%d 首次=%s 期间 rearm=%d 次"
+             "（监视线程按 20 ms 轮询继续装回）",
+             g_sigsys_probe_samples, g_sigsys_probe_diffs,
+             g_sigsys_probe_first ? g_sigsys_probe_first : "?", g_sigsys_rearms);
+  }
+  return NULL;
+}
+
+static void start_sigsys_selfcheck(void) {
+  pthread_t th;
+  pthread_attr_t attr;
+  pthread_attr_init(&attr);
+  pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+  int rc = pthread_create(&th, &attr, sigsys_probe_thread, NULL);
+  pthread_attr_destroy(&attr);
+  if (rc != 0) {
+    /* 不阻断启动：少的是证据，不是保护（C2：如实记下来） */
+    log_line("[node_bridge] WARN: SIGSYS 自检线程创建失败 rc=%d（本次启动没有主动自检）", rc);
+  }
+}
+
+
+
 
 /* ------------------------------------------------------------- 崩溃取证 ---- */
 
@@ -844,6 +957,11 @@ static void *bootstrap(void *arg) {
   /* ── ② 平台前置：SIGSYS shim + 环境契约（§5.6） ──────────────────────── */
   install_sigsys_shim();
   start_sigsys_watchdog();
+  /*
+   * 主动自检第 1 个采样点：**刚装完 shim 的此刻**（还没起 Node，理论上必然 ours）。
+   * 它的价值是「基准」——后面几个采样点与它对比，才知道是谁改的。
+   */
+  sigsys_selfcheck("install");
   setenv("UV_USE_IO_URING", "0", 1);
   setenv("HOME", ctx->home, 1);
   setenv("USERPROFILE", ctx->home, 1);
@@ -942,6 +1060,12 @@ static void *bootstrap(void *arg) {
   log_line("[node_bridge] calling node::Start(argc=%d) ...", argc);
   set_stage("start");
   g_node_running = 1;
+  /*
+   * 主动自检线程必须在 `node::Start()` **之前**起：Start 是阻塞的（跑到进程退出），
+   * 「Start 之后 200 ms / 1 s / 3 s」只能由另一个线程数。
+   */
+  start_sigsys_selfcheck();
+
 
   int rc = start(argc, argv);
 
