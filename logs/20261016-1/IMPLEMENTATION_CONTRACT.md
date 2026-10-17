@@ -411,3 +411,41 @@ host.setTransport(fn);                                           // Phase 2 接�
 8. **禁止** `ohos.permission` 之外的 ACL 由库申请（受限权限归消费方）。
 9. **禁止** `process.exit()` 出现在 `bootstrap.js` 的兜底路径里。
 10. **禁止**在 ArkTS 里使用 `any`/`unknown` 或把 `.so` 当包内模块 import（S1）。
+
+---
+
+## 附：轮次 4 真机修订（2026-10-17 · HAD-W24 / 7.0.0.107(SP7C00E100R13P5) / API 26 / OpenHarmony-7.0.0.105）
+
+### A. SIGSYS shim 的语义变更（`library/src/main/cpp/node_bridge.c`，commit `b1e61f6`）
+
+1. **只仿真 `si_code == SYS_SECCOMP` 的 SIGSYS**。其余来源（`SI_USER`=0 / `SI_TKILL`=-6 / `SI_QUEUE`=-1 / `SI_KERNEL`=128 …）
+   记一行现场后**恢复 `SIG_DFL` 并 re-raise**：仿真器不吞不是自己造成的信号。
+2. **siginfo 用内核 ABI 固定偏移读取**（musl 头里 `_sigsys` 名字不统一）：联合体从 **+16** 起；
+   `SYS_SECCOMP` 时 `+16 si_call_addr`、`+24 si_syscall`、`+28 si_arch`；`SI_USER` 时 `+16 si_pid`、`+20 si_uid`。
+   真机样例：`syscall=425 (io_uring_setup)`、`arch=0xC00000B7 (AUDIT_ARCH_AARCH64)`、`call_addr=0x59b6b2fe4c`。
+3. **监视线程**（`start_sigsys_watchdog`）：每 20 ms（前 60 s）/ 500 ms 核对 SIGSYS 处置，
+   被外部（libuv 的 `uv_signal_start`，由载荷 `signal-exit` 的 `process.on('SIGSYS')` 触发）改写时
+   留一行 `SIGSYS 处置被外部改写（外部=… flags=…）⇒ 已留档并重新装回 shim（第 N 次）` 并装回。
+4. **日志行契约不变**：`sys <epochMs> [node_bridge] …`，整行单次 `write`（O_APPEND 原子）。
+   新增可搜 token：`SIGSYS seccomp syscall=`、`SIGSYS unclassified … left-untouched`、`SIGSYS foreign si_code=…`、
+   `SIGSYS 处置被外部改写`、`SIGSYS 监视线程已启动`。
+
+### B. 真机验证（port 取自 `<base>/payload/pi-web.ready.json`，不硬编码）
+
+```
+修前：POST /api/agent/new {"toolNames":["read","write"]} → curl (56) empty reply, HTTP 000, 随后 web-auth 000
+      faultloggerd: Reason:Signal:SIGSYS(SI_USER)from:<own pid>:<own uid>
+      fault thread: Tid:<pid>, Name:pi.PiDesktopArk, #00 __syscall_cp+112 (ld-musl) → #01 epoll_wait → #02 EpollIoWaiter::WaitFor
+      node.log: 无任何 SIGSYS 诊断行（handler 不在信号路径上）
+修后：同一请求 → 200 {"success":true,"sessionId":…}；web-auth 200；hilog 'Cpp Crash' = 0
+      node.log: sys … [node_bridge] SIGSYS seccomp syscall=425 arch=0xc00000b7 call_addr=0x59b6b2fe4c pc=… at=svc-4
+      对照实验（临时关闭仿真的构建）：同一请求立即死亡，node.log 为
+        sys … SIGSYS seccomp syscall=425 … -> restore-default  ⇒ 崩溃点是工具路径上的 seccomp 陷阱，shim 在信号路径上
+      ⚠️ 该对照用的「文件开关」实现有缺陷（默认应为「仿真开」却观察到关闭），**已整体删除**，产品代码不含该开关。
+```
+
+### C. 未验证
+
+1. 「处置被外部改写」这条日志本轮**没有**实际取到（修前无日志、修后未触发）——机制上已实现，缺一次现场。
+2. 载荷把 SIGSYS 交回 libuv 的精确时刻仍未定位（`signal-exit` 的 `process.kill(process.pid,'SIGSYS')` 是**已知**的自发信号源，
+   但本轮没有取到它发生时的 siginfo 行）。
