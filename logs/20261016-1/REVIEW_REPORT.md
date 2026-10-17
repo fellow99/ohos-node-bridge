@@ -167,3 +167,60 @@ $ llvm-objdump -d <构建产物> | grep -B2 OH_LOG_Print
 ```
 
 B4 实测命令与原始输出见 `pi-desktop-ark/specs/overall-data-model.md` §6.2（HAP 46,031,244 B；三个 `.so` `compress_type=8`；`rawfile/resfile` 仍 `0`）。
+
+---
+
+## R3 · 2026-10-17 · SIGSYS **主动自检**上线 + 首次真机观测（回归留痕）
+
+### 1. 闭合的是哪个缺口
+
+`b1e61f6` 的监视线程（`sigsys_watchdog`，20 ms × 60 s 后转 500 ms）**能修**「处置被外部顶掉」，
+但**不能证明它发生过**：证据行 `SIGSYS 处置被外部改写…` 在历次真机轮次里**一次都没出现**，
+于是 R4.1 的故障链（libuv `uv_signal_start(SIGSYS)` 顶掉 shim）一直只是推断。
+本轮补的是「**可观测**」，不是再改一次处置逻辑。
+
+### 2. 改动（`library/src/main/cpp/node_bridge.c`）
+
+| 位置 | 改动 |
+|---|---|
+| `sigsys_selfcheck()`（新增，普通线程上下文） | 回读 `sigaction(SIGSYS, NULL, &cur)`，与 `sigsys_action_is_ours()` 比对；ours ⇒ 记一行；非 ours ⇒ **只发一条**决定性行（`处置=<kind>(addr=…​) flags=0x…​ ⇒ 已重装`），随后**共用**监视线程的处置路径（`g_prev_sigsys` 留档 + `install_sigsys_shim()` + `g_sigsys_rearms++`） |
+| `sigsys_probe_thread()` / `start_sigsys_selfcheck()`（新增） | 固定 5 个采样点：`t=install`（装完 shim 的此刻，bootstrap 线程）+ `t=0ms / 200ms / 1s / 3s`（`node::Start()` 是阻塞的，故在独立线程里数）→ 一条汇总行后线程退出。**不循环、不刷盘**（一次启动最多 6 行） |
+| `bootstrap()` | `install_sigsys_shim(); start_sigsys_watchdog();` 之后加 `sigsys_selfcheck("install")`；`int rc = start(argc, argv)` 之前加 `start_sigsys_selfcheck()` |
+
+日志格式沿用冻结的 `sys <epochMs> [node_bridge] …`。**两种结果都算闭合**：`ours` 说明窗口内没被改写，
+`external(addr=…)` 说明在那之前就被顶掉了。
+
+### 3. 真机观测（HAD-W24 / 7.0.0.107(SP7C00E100R13P5) / API 26 / OpenHarmony-7.0.0.105）
+
+`<base>/payload/node.log`（`base=/data/app/el2/100/base/org.fellow99.pi.PiDesktopArk/haps/entry/files`），
+本次启动（payload `1f85d684b3e0`）原样摘录：
+
+```
+sys 1792216461737 [node_bridge] SIGSYS 自检 t=install 处置=ours flags=0x44000004
+sys 1792216461784 [node_bridge] SIGSYS 自检 t=0ms 处置=ours flags=0x44000004
+sys 1792216461984 [node_bridge] SIGSYS 自检 t=200ms 处置=ours flags=0x44000004
+sys 1792216462784 [node_bridge] SIGSYS 自检 t=1s 处置=ours flags=0x44000004
+sys 1792216464785 [node_bridge] SIGSYS 自检 t=3s 处置=ours flags=0x44000004
+sys 1792216464785 [node_bridge] SIGSYS 自检汇总 t=3s 采样=5 差异=0 处置=ours（观测窗内未被外部改写；期间监视线程 rearm=0 次）
+```
+
+**判定：`ours` 全程，`差异=0`、`rearm=0`。** 另有两条独立旁证（同一次启动）：
+
+1. `sys 1792216510931 [node_bridge] SIGSYS seccomp syscall=425 … at=svc-4` —— 这一行**只可能由我们的
+   handler 写出**（`sigsys_handler()` 内 `SYS_SECCOMP` 分支），发生在启动后约 **+49 s**（
+   `POST /api/agent/new {"toolNames":["read","write"]}` 期间）⇒ 那一刻信号路径上**仍然是 ours**。
+2. `grep -c '处置被外部改写' node.log` = **0**（含历史启动）；`hilog -x | grep -ac 'Cpp Crash'` = **0**；
+   进程存活（一次启动跑完 ensure_session + prompt + SSE `text_delta`，无崩溃）。
+
+### 4. 这条观测**说明什么 / 不说明什么**
+
+- 说明：在「装完 shim → `node::Start` 后 3 s」这个窗口里，**处置没有被 libuv/`signal-exit` 顶掉**；
+  再加 +49 s 的 in-handler 旁证，本次启动的整段活跃期都没有被顶掉。因此 R4.1 的故障链**不能再**用
+  「监视线程漏掉了前 3 秒内的改写」来解释 —— 要么改写发生在别处/别的时刻，要么那次的处理路径与
+  本轮不同。
+- **不说明**：主动自检**只覆盖 `node::Start` 后的前 3 s**；扩展/主题加载、`process.on('SIGSYS')`
+  的注册发生在更晚（本次首次工具活动在 +30 s 量级），那一段的覆盖**只有**监视线程自己的
+  `处置被外部改写` 行（本次 0 次）。⇒ 仍是**剩余缺口**：3 s 之后若发生「改写又很快被我们装回」，
+  只有在监视线程的轮询间隙里才看得见。
+- 对监视线程的结论：**保持不变**（20 ms × 60 s 后 500 ms）。它现在与主动自检共用同一条处置路径，
+  且主动自检的汇总行会带上它的 `rearm` 计数，两者不会再出现「两套真相」。
