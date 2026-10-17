@@ -3,7 +3,8 @@
  *
  * 它在一条 **detached pthread（32 MB 栈）** 上完成 Node 的进程内启动：
  *   ① 建立 stdio 通道：fd0 ← /dev/null、fd1/fd2 ← 各自的 pipe，由独立 reader 线程持续排空并落盘
- *   ② 装 SIGSYS shim（io_uring_setup → 正好 -1；判定必须读指令编码，不能比 PC 与 si_addr）
+ *   ② 装 SIGSYS shim（**只仿真 SYS_SECCOMP** 陷阱：io_uring_setup → 正好 -1；判定必须读指令编码，
+ *      不能比 PC 与 si_addr；其它来源的 SIGSYS 一律恢复默认处置并 re-raise，另加监视线程防处置被顶掉）
  *   ③ dlopen("libnode.so", RTLD_NOW | RTLD_GLOBAL) → dlsym("_ZN4node5StartEiPPc")
  *   ④ 按 ArkTS 传入的 flags 组 argv（argc **不含**尾部 NULL 哨兵）→ 调 node::Start
  *   ⑤ 每一步失败都写 lastError()/stage()（ArkTS 可见，不允许静默失败）
@@ -219,78 +220,209 @@ static void log_line(const char *fmt, ...) {
 }
 
 /* ----------------------------------------------------------- SIGSYS shim ---- */
+/*
+ * 用途（原始需求）：把**被 seccomp 拦下**的系统调用伪装成「返回 -1」，
+ * 让 libuv 的 io_uring 探测之类的路径不因 SIGSYS 的默认处置（终止进程）而死。
+ *
+ * 真机教训（2026-10-17 · HAD-W24 / 7.0.0.107(SP7C00E100R13P5) / API 26 /
+ * OpenHarmony-7.0.0.105 / aarch64）：
+ *   工具路径（`POST /api/agent/new` 带 `toolNames`）会加载扩展与主题 ⇒ 载荷里的
+ *   `signal-exit` 注册 `process.on('SIGSYS')` ⇒ libuv 的 `uv_signal_start()` 用
+ *   **进程级 `sigaction()` 顶掉本 shim**。之后第一个 SIGSYS 进了 libuv →
+ *   `signal-exit` 的回调再 `process.kill(process.pid,'SIGSYS')` **自己给自己补发一遍**，
+ *   这一发落在「已恢复的旧处置」上 ⇒ 进程被自发 SIGSYS 打死。
+ *   faultloggerd 现场：`Reason:Signal:SIGSYS(SI_USER)from:<own pid>:<own uid>`，
+ *   故障线程停在 `epoll_wait`（主线程）。**SI_USER 说明这是进程自己 `kill()` 出来的**，
+ *   不是内核 seccomp 直接投递（后者是 `SYS_SECCOMP` + si_call_addr/si_syscall）。
+ *
+ * 结论（改动前先读）：shim 必须是「**接力 + 按 si_code 分流**」，不是「一次性占坑」：
+ *   ① 后台线程周期性核对 SIGSYS 的处置，被外部（libuv）改写就**记一行 + 重新装回**，
+ *      并把被顶掉的那个处置留档（g_prev_sigsys）；
+ *   ② handler 只对 `SYS_SECCOMP`（内核 seccomp 陷阱）做仿真；其它来源
+ *      （SI_USER / SI_TKILL / SI_QUEUE / SI_KERNEL …）**一律不吞** —— 记一行现场后
+ *      恢复 `SIG_DFL` 并 re-raise，把系统的默认动作原样交还。
+ *      **仿真器绝不能吞掉不是自己造成的信号**：kill 发来的终止信号该杀就得杀，
+ *      吞掉它只会把「谁在杀我」这个决定性证据一起吞掉。
+ */
+
+/* 内核 seccomp 陷阱的 si_code（Linux UAPI `SYS_SECCOMP`；musl 头里不一定有该宏） */
+#define SYS_SECCOMP_CODE 1
 
 /* SIGSYS 诊断限流：只写前若干条，避免信号风暴把自己的日志刷爆 */
 static volatile int g_sigsys_anomaly_logged = 0;
 /* 页大小掩码（在 install_sigsys_shim 里缓存；默认按 4 KB 起步） */
 static uintptr_t g_page_mask = 0xFFFu;
+/* 被本 shim 顶掉的外部处置（诊断用；handler 不转发、不依赖它做处置） */
+static struct sigaction g_prev_sigsys;
+static volatile int g_prev_sigsys_valid = 0;
+/* 重新装回的次数（进日志；>0 即证明「处置被外部顶掉过」） */
+static volatile int g_sigsys_rearms = 0;
+/*
+ * siginfo 原始字读取：**不依赖 libc 头里的字段宏**（musl 各版本对 `_sigsys` 联合体
+ * 的字段命名不一致，而偏移由内核 ABI 固定）。真机实测（HAD-W24, aarch64）确定布局：
+ *   +0  si_signo · +4 si_errno · +8 si_code
+ *   +16 联合体起点（**不是 +12**：si_code 之后有 4 B 对齐填充）：
+ *       · SI_USER/SI_TKILL: +16 si_pid · +20 si_uid
+ *       · SYS_SECCOMP:      +16 si_call_addr（64 位，= 触发系统调用的指令地址）
+ *                           +24 si_syscall（int）· +28 si_arch（unsigned）
+ *   实测样例：`si_call_addr=0x59b6b2fe4c si_syscall=425(io_uring_setup) si_arch=0xC00000B7(AUDIT_ARCH_AARCH64)`。
+ * 信号上下文里只读、不分配、不加锁。
+ */
+static int sigsys_si_i32(const siginfo_t *si, int idx) {
+  return si ? ((const int *)si)[idx] : -1;
+}
+static unsigned long long sigsys_si_u64(const siginfo_t *si, int idx) {
+  return si ? (unsigned long long)((const void *const *)si)[idx] : 0ULL;
+}
+/* 便捷取值：字段下标以 4 字节为单位（+16 ⇒ 4，+24 ⇒ 6，+28 ⇒ 7） */
+#define SI_IDX_PID 4
+#define SI_IDX_UID 5
+#define SI_IDX_CALL_ADDR 2
+#define SI_IDX_SYSCALL 6
+#define SI_IDX_ARCH 7
+
+/* 追加一段十进制/十六进制到栈上整行缓冲（信号上下文安全） */
+static size_t sigsys_append_word(char *line, size_t cap, size_t len, const char *label, int v) {
+  len = lb_append(line, cap, len, label);
+  if (v < 0) {
+    len = lb_append(line, cap, len, "-");
+    len = lb_append_dec(line, cap, len, (unsigned long long)(-(long long)v));
+  } else {
+    len = lb_append_dec(line, cap, len, (unsigned long long)v);
+  }
+  return len;
+}
 
 static void sigsys_handler(int sig, siginfo_t *si, void *uc_) {
   (void)sig;
-  (void)si;
   ucontext_t *uc = (ucontext_t *)uc_;
   const uintptr_t pc = (uintptr_t)uc->uc_mcontext.pc;
-
-  /*
-   * `svc #0` = 0xd4000001。
-   *
-   * ⚠️ 真机实测（HAD-W32 / HarmonyOS 6.1.0 / API 26 / 2026-10-17）：本设备在 seccomp SIGSYS 时
-   *    保存的 `uc_mcontext.pc` **已经指向 svc 之后** —— 在 `pc` 处读到的是 `0x1402f4b2`（一条 `b`
-   *    指令），而不是 svc。故判据必须同时探测 `pc` 与 `pc-4`：
-   *      · 任一位置命中 svc ⇒ 这是被拦截的系统调用：x0 = **正好 -1**
-   *        （返回 -ENOSYS(-38) 会让 libuv `uv__close(-38)` 触发 `assert(fd > STDERR_FILENO)`），
-   *        并保证 PC 越过该指令；
-   *      · 两处都不是 svc ⇒ **寄存器与 PC 一律不动**。
-   *        上一版为防「活锁」无条件 `pc += 4` + `x0 = -1`，在真机上会**跳掉一条真实指令**，
-   *        后果是执行流错位：有代码把 x0 里的 -1 当作指针传进 `strlen`
-   *        ⇒ `SIGSEGV@0xffffffffffffffe0`，整个应用进程 abort（已实测复现并定位）。
-   *        活锁在此不成立：handler 返回后内核按 x0 的值继续执行，不会重投同一条指令。
-   */
-  const uint32_t at_pc = *(const uint32_t *)pc;
+  const uint32_t at_pc = *(const uint32_t *)pc;   /* `svc #0` = 0xd4000001 */
   const int at_svc = (at_pc == 0xd4000001u);
+  const int code = sigsys_si_i32(si, 2);
 
   int before_svc = 0;
   uint32_t before_pc = 0;
-  if (!at_svc && (pc & g_page_mask) >= 4u) {
-    before_pc = *(const uint32_t *)(pc - 4u);  /* 不跨页才读 */
+  if ((pc & g_page_mask) >= 4u) {
+    before_pc = *(const uint32_t *)(pc - 4u);   /* 不跨页才读 */
     before_svc = (before_pc == 0xd4000001u);
   }
 
-  if (at_svc) {
-    uc->uc_mcontext.regs[0] = (uint64_t)-1;
-    uc->uc_mcontext.pc = pc + 4u;
+  const int want_log = (g_sigsys_anomaly_logged < 12);
+  if (want_log) g_sigsys_anomaly_logged += 1;
+
+  if (code == SYS_SECCOMP_CODE) {
+    /*
+     * ① 内核 seccomp 陷阱 —— 这才是本 shim **应该仿真**的对象。
+     *
+     * ⚠️ 真机实测：本设备在 seccomp SIGSYS 时保存的 `uc_mcontext.pc` **可能已指向
+     *    svc 之后**（那里读到的是下一条指令，如 `b`），故判据必须同时探测 `pc` 与 `pc-4`：
+     *      · 任一位置命中 svc ⇒ x0 = **正好 -1**
+     *        （返回 -ENOSYS(-38) 会让 libuv `uv__close(-38)` 触发 `assert(fd > STDERR_FILENO)`），
+     *        并保证 PC 越过该指令；
+     *      · 两处都不是 svc ⇒ **寄存器与 PC 一律不动**。
+     *        上一版为防「活锁」无条件 `pc += 4` + `x0 = -1`，在真机上会**跳掉一条真实指令**，
+     *        后果是执行流错位：有代码把 x0 里的 -1 当作指针传进 `strlen`
+     *        ⇒ `SIGSEGV@0xffffffffffffffe0`，整个应用进程 abort（已实测复现并定位）。
+     *        活锁在此不成立：handler 返回后内核按 x0 的值继续执行，不会重投同一条指令。
+     */
+    if (want_log) {
+      int fd = g_log_fd >= 0 ? g_log_fd : open_log_fd();
+      if (fd >= 0) {
+        char line[320];
+        size_t len = 0;
+        line[0] = 0;
+        len = lb_append(line, sizeof(line), len, STREAM_SYS " ");
+        len = lb_append_dec(line, sizeof(line), len, (unsigned long long)now_ms());
+        len = lb_append(line, sizeof(line), len, " [node_bridge] SIGSYS seccomp syscall=");
+        len = lb_append_dec(line, sizeof(line), len, (unsigned long long)sigsys_si_i32(si, SI_IDX_SYSCALL));
+        len = lb_append(line, sizeof(line), len, " arch=");
+        len = lb_append_hex(line, sizeof(line), len, (unsigned long long)(unsigned)sigsys_si_i32(si, SI_IDX_ARCH));
+        len = lb_append(line, sizeof(line), len, " call_addr=");
+        len = lb_append_hex(line, sizeof(line), len, sigsys_si_u64(si, SI_IDX_CALL_ADDR));
+        len = lb_append(line, sizeof(line), len, " pc=");
+        len = lb_append_hex(line, sizeof(line), len, (unsigned long long)pc);
+        len = lb_append(line, sizeof(line), len, at_svc ? " at=svc" : (before_svc ? " at=svc-4" : " at=none"));
+        len = lb_append(line, sizeof(line), len, "\n");
+        raw_write_fd(fd, line, len);
+        if (g_log_fd < 0) close(fd);
+      }
+    }
+    if (at_svc) {
+      uc->uc_mcontext.regs[0] = (uint64_t)-1;
+      uc->uc_mcontext.pc = pc + 4u;
+      return;
+    }
+    if (before_svc) {
+      uc->uc_mcontext.regs[0] = (uint64_t)-1;
+      return;  /* PC 已在 svc 之后：保持不动，只补返回值 */
+    }
+    /* seccomp 但两处都不是 svc：不改 x0 也不改 PC（理由见上），只留一条**可搜**的诊断。 */
+    if (want_log) {
+      int fd = g_log_fd >= 0 ? g_log_fd : open_log_fd();
+      if (fd >= 0) {
+        char line[320];
+        size_t len = 0;
+        line[0] = 0;
+        len = lb_append(line, sizeof(line), len, STREAM_SYS " ");
+        len = lb_append_dec(line, sizeof(line), len, (unsigned long long)now_ms());
+        len = lb_append(line, sizeof(line), len, " [node_bridge] SIGSYS unclassified pc=");
+        len = lb_append_hex(line, sizeof(line), len, (unsigned long long)pc);
+        len = lb_append(line, sizeof(line), len, " insn=");
+        len = lb_append_hex(line, sizeof(line), len, (unsigned long long)at_pc);
+        len = lb_append(line, sizeof(line), len, " prev=");
+        len = lb_append_hex(line, sizeof(line), len, (unsigned long long)before_pc);
+        len = lb_append(line, sizeof(line), len, " left-untouched\n");
+        raw_write_fd(fd, line, len);
+        if (g_log_fd < 0) close(fd);
+      }
+    }
     return;
-  }
-  if (before_svc) {
-    uc->uc_mcontext.regs[0] = (uint64_t)-1;
-    return;  /* PC 已在 svc 之后：保持不动，只补返回值 */
   }
 
   /*
-   * 两处都不是 svc：不改 x0 也不改 PC（理由见上），只留一条**可搜**的诊断。
-   * 行格式必须与 §1.3 冻结契约一致：`sys <epochMs> [node_bridge] …`，且整行一次 write
-   * （O_APPEND 只保证单次 write 原子）。限流 4 条，避免信号风暴刷爆日志。
+   * ② 不是内核 seccomp 陷阱（SI_USER=0 / SI_TKILL=-6 / SI_QUEUE=-1 / SI_KERNEL=128 …）：
+   *    **不仿真、不吞**。记完整现场（si_pid/si_uid 能直接指认「谁发的」），
+   *    然后恢复默认处置并 re-raise。
    */
-  if (g_sigsys_anomaly_logged < 4) {
-    g_sigsys_anomaly_logged += 1;
+  if (want_log) {
     int fd = g_log_fd >= 0 ? g_log_fd : open_log_fd();
     if (fd >= 0) {
-      char line[256];
+      char line[384];
       size_t len = 0;
       line[0] = 0;
       len = lb_append(line, sizeof(line), len, STREAM_SYS " ");
       len = lb_append_dec(line, sizeof(line), len, (unsigned long long)now_ms());
-      len = lb_append(line, sizeof(line), len, " [node_bridge] SIGSYS unclassified pc=");
+      len = lb_append(line, sizeof(line), len, " [node_bridge] SIGSYS foreign");
+      len = sigsys_append_word(line, sizeof(line), len, " si_code=", code);
+      len = sigsys_append_word(line, sizeof(line), len, " si_pid=", sigsys_si_i32(si, SI_IDX_PID));
+      len = sigsys_append_word(line, sizeof(line), len, " si_uid=", sigsys_si_i32(si, SI_IDX_UID));
+      len = lb_append(line, sizeof(line), len, " pc=");
       len = lb_append_hex(line, sizeof(line), len, (unsigned long long)pc);
       len = lb_append(line, sizeof(line), len, " insn=");
       len = lb_append_hex(line, sizeof(line), len, (unsigned long long)at_pc);
       len = lb_append(line, sizeof(line), len, " prev=");
       len = lb_append_hex(line, sizeof(line), len, (unsigned long long)before_pc);
-      len = lb_append(line, sizeof(line), len, " left-untouched\n");
+      len = lb_append(line, sizeof(line), len, " own_pid=");
+      len = lb_append_dec(line, sizeof(line), len, (unsigned long long)getpid());
+      len = lb_append(line, sizeof(line), len, " -> restore-default-and-reraise\n");
       raw_write_fd(fd, line, len);
       if (g_log_fd < 0) close(fd);
     }
   }
+  {
+    struct sigaction dfl;
+    memset(&dfl, 0, sizeof(dfl));
+    dfl.sa_handler = SIG_DFL;
+    sigemptyset(&dfl.sa_mask);
+    sigaction(sig, &dfl, NULL);
+    kill(getpid(), sig);   /* 立即按默认处置投递；返回后不会再落到本 handler */
+  }
+}
+
+static int sigsys_action_is_ours(const struct sigaction *a) {
+  if (a == NULL) return 1;
+  return (a->sa_flags & SA_SIGINFO) && a->sa_sigaction == sigsys_handler;
 }
 
 static void install_sigsys_shim(void) {
@@ -306,6 +438,57 @@ static void install_sigsys_shim(void) {
   sigemptyset(&sa.sa_mask);
   sigaction(SIGSYS, &sa, NULL);
 }
+
+/*
+ * 监视线程：libuv 的 `uv_signal_start(SIGSYS)`（`process.on('SIGSYS')` 触发）会在
+ * **任意时刻**顶掉上面的处置。轮询只能缩小窗口，真正的一致性来自 handler 的 si_code
+ * 分流；这里做两件事：① 记下被顶掉的处置并装回 shim；② 留一行可搜的证据。
+ * 前 60 秒 20 ms 一次（覆盖载荷启动 + 首个会话创建），之后 500 ms 一次。
+ */
+static void *sigsys_watchdog(void *arg) {
+  (void)arg;
+  long ticks = 0;
+  for (;;) {
+    long ms = (ticks < 3000) ? 20 : 500;
+    struct timespec ts;
+    ts.tv_sec = ms / 1000;
+    ts.tv_nsec = (ms % 1000) * 1000000L;
+    nanosleep(&ts, NULL);
+    struct sigaction cur;
+    memset(&cur, 0, sizeof(cur));
+    if (sigaction(SIGSYS, NULL, &cur) != 0) continue;
+    if (sigsys_action_is_ours(&cur)) continue;
+
+    g_prev_sigsys = cur;
+    g_prev_sigsys_valid = 1;
+    install_sigsys_shim();
+    g_sigsys_rearms += 1;
+    {
+      const char *what = (cur.sa_flags & SA_SIGINFO) ? "handler"
+                        : (cur.sa_handler == SIG_DFL) ? "SIG_DFL"
+                        : (cur.sa_handler == SIG_IGN) ? "SIG_IGN" : "handler";
+      log_line("[node_bridge] SIGSYS 处置被外部改写（外部=%s flags=%#x）⇒ 已留档并重新装回 shim（第 %d 次）",
+               what, (unsigned)cur.sa_flags, g_sigsys_rearms);
+    }
+  }
+  return NULL;
+}
+
+static void start_sigsys_watchdog(void) {
+  pthread_t th;
+  pthread_attr_t attr;
+  pthread_attr_init(&attr);
+  pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+  int rc = pthread_create(&th, &attr, sigsys_watchdog, NULL);
+  pthread_attr_destroy(&attr);
+  if (rc != 0) {
+    /* 不阻断启动：盯梢失败只是少了证据，handler 本身仍然生效（C2：要如实记下来） */
+    log_line("[node_bridge] WARN: SIGSYS 监视线程创建失败 rc=%d（处置被外部顶掉时不会再自动装回）", rc);
+  } else {
+    log_line("[node_bridge] SIGSYS 监视线程已启动（20 ms × 60 s，之后 500 ms）");
+  }
+}
+
 
 /* ------------------------------------------------------------- 崩溃取证 ---- */
 
@@ -660,6 +843,7 @@ static void *bootstrap(void *arg) {
 
   /* ── ② 平台前置：SIGSYS shim + 环境契约（§5.6） ──────────────────────── */
   install_sigsys_shim();
+  start_sigsys_watchdog();
   setenv("UV_USE_IO_URING", "0", 1);
   setenv("HOME", ctx->home, 1);
   setenv("USERPROFILE", ctx->home, 1);
@@ -892,7 +1076,6 @@ static napi_value js_start(napi_env env, napi_callback_info info) {
              "路径类参数被截断会直接失败）",
              (int)sizeof(g_ctx.flags) - 1, (int)sizeof(g_ctx.envpairs) - 1);
   }
-
   /* 崩溃记录落点（契约 §1.4）：<home>/node-bridge/last-crash.json */
   snprintf(g_crash_path, sizeof(g_crash_path), "%s/node-bridge/last-crash.json", g_ctx.home);
   {
