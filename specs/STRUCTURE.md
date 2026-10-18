@@ -256,4 +256,4 @@ specs/
 | `samples/minimal-app/`、`samples/arkweb-http/` | §7.2 | ⬜ 不存在 |
 | `tools/rt-build/` | 附录 D / G.6-C | ⬜ 不存在 |
 | `specs/NNN-*/`（001–007） | §7.3 / §10 | ⬜ 不存在 |
-| `_test/test_node_probe`（真机探针工程） | §D.7–§D.9 | ⬜ **不在本仓库**（位于父工程 `_test/`，本仓库引用时须写明外部路径） |
+| `samples/minimal-app`（真机探针 + 最小样例） | §D.7–§D.9 · `samples/README.md` | ✅ **在本仓库**（消费 `library` 的 HAP；一键取证 `node tools/probe.mjs`） |
