@@ -9,6 +9,10 @@
 库的设计与对接契约见 [`docs/000-工程规划.md`](docs/000-工程规划.md)（只讲库本身，
 不绑定任何具体应用的业务语义）。
 
+> **在 OC Desktop 中的角色**：本库是 [`oc-desktop-ark`](../oc-desktop-ark)（**HarmonyOS Edition**）的运行时底座；
+> `runtime/` 目录存放锁定版本的 `libnode-arm64.so`（v24.2.0 / ABI 137）与投放/校验工具，
+> 由 `tools/provision.mjs` 投放进消费方模块。Electron on HarmonyOS Edition（[`oc-desktop-hos`](../oc-desktop-hos)）**不使用**本库。
+
 | 项 | 值 |
 | --- | --- |
 | 包名 / 版本 | `@fellow99/node-bridge` / `0.1.0`（**骨架**） |
