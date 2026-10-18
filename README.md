@@ -4,7 +4,8 @@
 > `NAPI 引导 + dlopen + node::Start` 的形态嵌进 **HarmonyOS 应用自己的进程**，
 > 封装成可发布到 [ohpm](https://ohpm.openharmony.cn/) 的 **ArkTS 组件库**。
 
-它不是应用，而是**应用里的 Node.js 脚本环境**。唯一在册消费方：`pi-desktop-ark`（**Pi Desktop V2**）——
+它不是应用，而是**应用里的 Node.js 脚本环境**。唯一在册消费方：`pi-desktop-ark`
+（**Pi Desktop · HarmonyOS Edition**，应用名 `Pi Desktop V2`）——
 本库与它的**分工与对接契约**见 [`docs/000-工程规划.md`](docs/000-工程规划.md) §6；**应用侧的一切规划**在
 `../pi-desktop-ark/docs/000-工程规划.md`（本仓库不复制应用语义）。
 
