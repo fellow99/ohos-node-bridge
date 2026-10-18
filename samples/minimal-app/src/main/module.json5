@@ -1,0 +1,40 @@
+{
+  "module": {
+    "name": "minimalapp",
+    "type": "entry",
+    "description": "$string:module_desc",
+    "mainElement": "EntryAbility",
+    "deviceTypes": ["2in1", "tablet"],
+    "deliveryWithInstall": true,
+    "installationFree": false,
+    "pages": "$profile:main_pages",
+    "abilities": [
+      {
+        "name": "EntryAbility",
+        "srcEntry": "./ets/entryability/EntryAbility.ets",
+        "description": "$string:EntryAbility_desc",
+        "icon": "$media:icon",
+        "label": "$string:EntryAbility_label",
+        "startWindowIcon": "$media:startIcon",
+        "startWindowBackground": "$color:start_window_background",
+        "exported": true,
+        "skills": [
+          {
+            "entities": ["entity.system.home"],
+            "actions": ["action.system.home"]
+          }
+        ]
+      }
+    ],
+    // 四项分别是「出网 / 取网络信息 / 允许匿名可执行内存（JIT）/ 忽略原生库签名校验（libnode.so 未签名）」。
+    // 依据：工程规划 §D.6（HAP 内原生库不需要 .codesign，真机实测）+ §D.8（W^X 与 JIT 的前提链）。
+    // ⚠️ `kernel.*` 两项属受限权限：调试 Profile 通常已包含；若装机报权限错误，说明该 Profile 缺 ACL，
+    //    需在 DevEco 的签名配置里改用带 ACL 的 Profile（见 samples/minimal-app/README.md §1）。
+    "requestPermissions": [
+      { "name": "ohos.permission.INTERNET" },
+      { "name": "ohos.permission.GET_NETWORK_INFO" },
+      { "name": "ohos.permission.kernel.EXEMPT_ANONYMOUS_EXECUTABLE_MEMORY" },
+      { "name": "ohos.permission.kernel.IGNORE_LIBRARY_VALIDATION" }
+    ]
+  }
+}

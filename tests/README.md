@@ -12,6 +12,7 @@
 | ② ELF 独立交叉校验（六项，不含 SHA-256） | `tools/elf-inspect.py <so>` | ✅ 已实现（本机对 `pi-desktop-ark/entry/libs/arm64-v8a/libnode.so` → `VERDICT: PASS`） | python3 |
 | ③ **host 侧门禁（不接真机）** | `tools/smoke-host.mjs` | ✅ **本次实现**；本机实测 `SMOKE: PASS`（4/4 段全 PASS，③ 段 6 个用例文件全 exit 0） | Node 24（`node` 在 PATH）+ ①② 的前置 |
 | ④ 真机自检（端到端证书） | `payload/selfcheck.js` + `hdc fport` + `curl` | ✅ 脚本已实现（`/facts` `/log` `/rport` `/diag`）；⬜ **每轮真机都要重跑**（本文件给不出真机结论） | 已签名 HAP + 真机 + ACL（见 §三） |
+| ⑥ **样例/探针接线（离线守门）** | `tests/payload/sample-wiring.test.mjs`（8 例） | ✅ **2026-10-18 新增**；8/8 PASS | 无（纯读文件，不接真机） |
 | ⑤ 交叉编译引导件 | `tools/build-bridge.mjs` | ✅ 本次实现；⬜ **本次未运行**（hvigor 全量构建，且 `library/**` 正被并行修改 —— 见 §五） | `DEVECO_SDK_HOME` + `hvigorw.bat` |
 
 **三层之外的一个重要区分**：`library/**`（ArkTS + NAPI 原生件）**没有任何 host 侧单测** —— 它的行为判定只能靠真机
@@ -130,7 +131,7 @@ hdc shell hilog -x | grep -E "node-bridge|Cpp Crash"     # 辅助留档（**不�
 |---|---|---|
 | ArkTS 侧（`library/**`）：状态机、`logs()` 环、`lastCrash()`、`Logger.tail` 的 UTF-8 | host 上跑不了 ArkTS/NAPI | 真机 + 消费方诊断面板；`/log` 读回 |
 | 真传输层（Node ⇄ ArkTS 的 `napi_threadsafe_function`） | Phase 2 才实现；现在只有"未接线必须结构化 reject" | Phase 2 的 spec/plan 用例 + 真机 |
-| `libnode.so` 真机行为（ACL、裸名 `dlopen`、`spawn` 事件语义） | 只有设备能给答案 | `_test/test_node_probe` 探针（§D.7）+ 本目录 §三 |
+| `libnode.so` 真机行为（ACL、裸名 `dlopen`、`spawn` 事件语义） | 只有设备能给答案 | `samples/minimal-app` 探针（`node tools/probe.mjs`，§D.7）+ 本目录 §三 |
 | 零解压只读直读（`resfile/`，P0-13） | 本工程未做 | 消费方 payload 落地后真机 `/facts` |
 | `compressNativeLibs` 的实际压缩结果（`compress_type == 8`） | 需查**签名 HAP**，不查磁盘（§5.9） | 附录 A 的 `zipfile` 一行命令 |
 | 大载荷解包耗时（27.2k 文件 / 884 MB，P0-5） | 需要真机 + 真实载荷 | 真机 + 日志里的解包耗时行 |

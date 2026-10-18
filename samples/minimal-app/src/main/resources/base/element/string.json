@@ -1,0 +1,7 @@
+{
+  "string": [
+    { "name": "module_desc", "value": "ohos-node-bridge 最小样例 + 内置探针" },
+    { "name": "EntryAbility_desc", "value": "Node Bridge 样例" },
+    { "name": "EntryAbility_label", "value": "Node Bridge 样例" }
+  ]
+}

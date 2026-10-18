@@ -1,0 +1,11 @@
+{
+  "name": "minimalapp",
+  "version": "0.1.0",
+  "description": "ohos-node-bridge 最小样例 + 内置探针（HAP）",
+  // 目录名带连字符便于阅读；module.name 用不含连字符的 `minimalapp`（构建期标识符更安全）。
+  // 依赖走**相对路径**指向库源码：这样 `ohpm install` 会用仓库里的 library 现场打 HAR，
+  // 不需要先发布到 ohpm（离线可构建）。
+  "dependencies": {
+    "@fellow99/node-bridge": "file:../../library"
+  }
+}

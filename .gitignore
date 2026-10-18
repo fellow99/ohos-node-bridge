@@ -24,5 +24,9 @@ library/libs/
 library/src/main/libs/
 *.har
 
+# ohpm 生成的本地依赖锁（本仓库不提交任何 lock；下次 ohpm install 会重写）
+oh-package-lock.json5
+/**/oh-package-lock.json5
+
 # hvigor 生成的构建期常量（每次构建重写，不入库）
 /**/BuildProfile.ets
