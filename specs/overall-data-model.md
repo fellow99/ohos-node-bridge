@@ -80,7 +80,7 @@
 
 | 字段 | 类型 | 含义 | 约束 | 现值 ✅ |
 |---|---|---|---|---|
-| `localStore.path` | `string` | 本地运行时缓存目录（相对**库仓库根**） | 第一优先来源；不外发（父工程 `.gitignore`） | `"../ohos-node-runtime"` |
+| `localStore.path` | `string` | 本地运行时缓存目录（相对**库仓库根**） | 第一优先来源；目录在仓库内、仅 `*.so` 不入库（`/runtime/**/*.so`），元数据入库 | `"runtime"`（v0.11 前为 `"../ohos-node-runtime"`） |
 | `localStore.envOverride` | `string` | 覆盖该路径的环境变量名 | CI / 另一台机器用 | `"OHOS_NODE_RUNTIME_DIR"` |
 | `localStore.layout` | `string` | 目录布局约定（人读） | 工具实际尝试 3 个布局候选（`node-<v>/<file>` → `<v>/<file>` → `<file>`） | ✅ |
 

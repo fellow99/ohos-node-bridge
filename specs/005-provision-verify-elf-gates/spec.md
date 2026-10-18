@@ -74,7 +74,7 @@
 
 | 编号 | 需求 | 判据 / 落点 | 现状 |
 |---|---|---|---|
-| **FR-005-012** | **来源优先级**：本地运行时目录（默认 `<父工程>/ohos-node-runtime`，`OHOS_NODE_RUNTIME_DIR` 可覆盖）→ `--from` → （显式 `--download` 时）镜像 → 上游 | `provision.mjs:73-82,234-257`；§G.3 | ✅ 实测（默认走本地目录）；⚠️ `--from` **实际优先于本地目录**（显式来源覆盖默认），与 §G.3 表格「1 本地 → 2 `--from`」的读法不同，见 plan §5.1 注 |
+| **FR-005-012** | **来源优先级**：仓库内运行时目录（默认 `runtime/`，`OHOS_NODE_RUNTIME_DIR` 可覆盖）→ `--from` → （显式 `--download` 时）镜像 → 上游 | `provision.mjs:86-94,248-271`；§G.3 | ✅ 实测（默认走仓库内 `runtime/`）；⚠️ `--from` **实际优先于本地目录**（显式来源覆盖默认），与 §G.3 表格「1 本地 → 2 `--from`」的读法不同，见 plan §5.1 注 |
 | **FR-005-013** | **联网回退链**：`--download` 时依次尝试 `mirror.url` → `source.url`，**任一失败自动下一个**，全失败才报错 | `provision.mjs:238-256` | ⚠️ 代码在，但 `mirror.kind=null`（`openItems[0]`）⇒ 回退链**当前只有一档**（只试上游），无法被触发验证 ⬜ |
 | **FR-005-014** | **离线优先**：本地目录有产物即不联网；找不到时给出**三条明确出路**（手工放置 / `--from` / `--download`），不猜、不降级 | `provision.mjs:258-266` | ✅ 实测（错误文本含三条出路与上游 URL） |
 | **FR-005-015** | **代理真相**：检测到代理环境变量但未开 `NODE_USE_ENV_PROXY` 时，**打印可直接粘贴的正确命令**，而不是含糊的 `fetch failed` | `provision.mjs:247-256` | ✅ 实测（本机无代理变量，路径未触发；文本见 plan §6.3-⑨ ⬜ 待有代理环境复现） |
@@ -109,7 +109,7 @@
 | **运行时条目** `runtimes[i]` | 一个可投放的产物及其全部事实 | 身份：`node` / `nodeModuleVersion` / `abi` / `file` / `deployAs`；证据：`size` / `sha256` / `soname`；能力：`needsLibcxx` / `embeds` / `flags` / `signed`；出处：`source` / `mirror`；结论：`gates` / `verifiedOn` / `verifiedDevice` / `verifiedNotes` | ✅ 1 条 |
 | **门禁结果** `gates` | 七项判定的**存档**（写给人和审计看；工具不比对，见 FR-005-011 ⚠️） | `typeDyn` / `ptInterp` / `machineAArch64` / `neededLibcxx` / `exportsNodeStart` / `sha256Match` / `versionGeq2219` | ✅ 七项全 true/0 |
 | **供给来源** `source` / `mirror` | 从哪来（上游 release 资产 / 镜像），以及镜像是否已建立 | `kind` / `repo` / `tag` / `asset` / `url` / `license[]` / `builtWith`；`mirror.kind` 当前为 `null` | ⚠️ 无镜像（`openItems[0]`） |
-| **本地缓存** `<父工程>/ohos-node-runtime/` | 不入库的二进制落地目录；`README.md` + `SHA256SUMS` + `node-<版本>/<上游原名>.so` + `PROVENANCE.md` | `localStore{path,envOverride,layout}`；可用 `sha256sum -c SHA256SUMS` 自证 | ✅ 已就位（126,809,264 B） |
+| **本地缓存** `runtime/`（仓库内） | 仅 `*.so` 不入库的二进制落地目录；`README.md` + `SHA256SUMS` + `node-<版本>/<上游原名>.so` + `PROVENANCE.md`（除 `.so` 外均入库） | `localStore{path,envOverride,layout}`；可用 `sha256sum -c SHA256SUMS` 自证 | ✅ 已就位（126,809,264 B；2026-10-18 自父工程 `../ohos-node-runtime/` 迁入） |
 | **签名段** `.codesign` | 独立分发所需的签名载体：页对齐 4096 B 段，内填 296 B（`ElfSignInfo(8B)+descriptor(256B)+SHA256(descriptor)(32B)`） | 页对齐 / `flags=0x10`（`FLAG_SELF_SIGN`）/ `csVersion=3` / 无私钥 | ✅ 可生成（**上游原件无此段**） |
 | **投放目录** `<模块>/libs/<abi>/` | 投放终点，也是 HAP 的原生库落点 | 只应有 `libnode.so`（投放名由 `deployAs` 决定）+ `libc++_shared.so`；HAR 侧由 `library/.ohpmignore:11` 排除 `**/libnode.so` | ✅ 实测 2 文件 |
 
@@ -176,7 +176,7 @@
 |---|---|---|
 | 上游（消费） | 上游 release 资产（`electerm/ohos-node-shared` tag `ohos-node-shared-v24.2.0` 的 `libnode-arm64.so`） | 唯一当前来源；SHA-256 锁定（附录 D.4 候选表 · 锁文件 `source`） |
 | 上游（消费） | ohos-sdk（`libc++_shared.so` + 交叉工具链） | 通过 `--sdk` / `OHOS_SDK_NATIVE` / `DEVECO_SDK_HOME` 定位（`provision.mjs:198-212`） |
-| 上游（消费） | 本地运行时缓存 `<父工程>/ohos-node-runtime/`（**不入 git**，可重建） | 目录约定与重新填充步骤见该目录 `README.md` 与 `node-v24.2.0/PROVENANCE.md` |
+| 上游（消费） | 仓库内运行时缓存 `runtime/`（**仅 `*.so` 不入 git**，元数据入库，可重建） | 目录约定与重新填充步骤见 `runtime/README.md` 与 `runtime/node-v24.2.0/PROVENANCE.md` |
 | 下游（提供） | **`007-distribution` 的接入文档** | 消费方「怎么拿运行时」的说明由它承载；本模块只提供工具与锁文件（§7.5 / §G.8） |
 | 下游（提供） | 消费方 `pi-desktop-ark/scripts/provision-runtime.sh`（本仓库外，✅ 已存在） | 自述「投放**只有一份实现**」并委托 `provision.mjs`；脚本约定 `BRIDGE` / `NODE` / `ABI` 三个环境变量与 `--check` / `--download` 透传 |
 | 下游（提供） | `library/.ohpmignore:11`（`**/libnode.so`） | 保证 120 MB 二进制不随 HAR 发布（S10 · §7.5） |

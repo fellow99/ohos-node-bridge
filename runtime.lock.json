@@ -52,9 +52,9 @@
     "abi": "arm64-v8a"
   },
   "localStore": {
-    "path": "../ohos-node-runtime",
+    "path": "runtime",
     "envOverride": "OHOS_NODE_RUNTIME_DIR",
-    "layout": "node-<version>/<上游资产原名>.so + SHA256SUMS（本例：node-v24.2.0/libnode-arm64.so）"
+    "layout": "node-<version>/<上游资产原名>.so + SHA256SUMS（本例：runtime/node-v24.2.0/libnode-arm64.so）；仅 *.so 不入库，README/SHA256SUMS/PROVENANCE 入库"
   },
   "openItems": [
     "镜像发布：当前无制品库，公开镜像 Release 未建立 ⇒ 第三方（ohpm 使用者）暂时只能按 source.url 自取 + SHA-256 校验；需要公开分发时新建 fellow99/ohos-node-runtime 并回填 mirror。",

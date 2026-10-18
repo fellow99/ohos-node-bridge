@@ -234,7 +234,7 @@ specs/
 | `*.har` | `library/build/…` | `.gitignore:25` + `.ohpmignore:17` | — |
 | `library/BuildProfile.ets` | 模块根 | `.gitignore:28`（hvigor 每次构建重写） | — |
 | 签名材料：`signing.*.local.json` / `*.p12` / `*.p7b` / `*.cer` | 任意 | `.gitignore:12-15` | 规划 §7.2 · README「仓库内不含任何密钥」 |
-| 本地运行时缓存 | `<父工程>/ohos-node-runtime/` | 父工程 `.gitignore`（附录 G.1/G.2） | 附录 G.1 |
+| 运行时缓存二进制 `libnode-arm64.so`（120.9 MiB） | 仓库内 `runtime/node-<版本>/` | `.gitignore:28` `/runtime/**/*.so`（同目录 README/SHA256SUMS/PROVENANCE **入库**；2026-10-18 前缓存位于父工程 `../ohos-node-runtime/`） | 附录 G.1/G.2 |
 | 自签中间产物 / 下载中转 | `os.tmpdir()` | `provision.mjs:36-38` 退出清理 | 附录 G.4 |
 
 ### 8.1 ⚠️ 结构层面发现的三处「规划与代码不一致」（评审必读）

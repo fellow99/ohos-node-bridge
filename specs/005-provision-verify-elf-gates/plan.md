@@ -2,7 +2,8 @@
 
 > **模块**：运行时获取与校验 · ELF 门禁与投放（host 侧工具链）
 > **性质**：技术实现计划（选型结论、数据模型、接口契约、算法、错误面、测试与遗留）。
-> **依据**：`specs/constitution.md`（C1–C7 / S1–S10 / G3–G5 / G11）· `docs/000-工程规划.md`（唯一权威，下称「规划 §」：§5.8 · 附录 G 全文 · 附录 D.4–D.6/D.9 · §7.4 · §9.3 · §4.1 第 10/14 项 · R2/R8/R20/R21/R22）· `specs/STRUCTURE.md` / `TECH.md` 口径 · 本仓库与 `../ohos-node-runtime/` 实测。
+> **依据**：`specs/constitution.md`（C1–C7 / S1–S10 / G3–G5 / G11）· `docs/000-工程规划.md`（唯一权威，下称「规划 §」：§5.8 · 附录 G 全文 · 附录 D.4–D.6/D.9 · §7.4 · §9.3 · §4.1 第 10/14 项 · R2/R8/R20/R21/R22）· `specs/STRUCTURE.md` / `TECH.md` 口径 · 本仓库与 `runtime/`（2026-10-18 自父工程 `../ohos-node-runtime/` 迁入）实测。
+
 > **标记**：✅实测 / 🔶沿用 / ⬜待验证 / ⚠️冲突或风险。**本文件的行号一律指 as-built 文件**（`tools/*` 与 `runtime.lock.json` 本次逐行读过）。
 > **版本**：v1.0 · 2026-10-16 · 状态：实现已落地（三件套 + 锁文件），未落地项见 §9。
 
@@ -14,7 +15,7 @@
 
 | 项 | 值 | 说明 |
 |---|---|---|
-| 开发机 | Windows + **Git-Bash**（`bash` 语义、`/d/...` 路径） | 仓库与缓存目录都在同一台机器的 `D:` 盘；`/d/pi-workspace/{ohos-node-bridge,ohos-node-runtime}` |
+| 开发机 | Windows + **Git-Bash**（`bash` 语义、`/d/...` 路径） | 仓库与缓存目录在同一台机器的 `D:` 盘；缓存 2026-10-18 起位于仓库内 `/d/pi-workspace/ohos-node-bridge/runtime/`（此前为同级 `/d/pi-workspace/ohos-node-runtime/`） |
 | 工具链 Node | 本机 ✅ `node v24.7.0` | 脚本要求 **Node ≥ 18**（用到内置 `fetch` 与 `node:` 前缀导入）；其中 **`NODE_USE_ENV_PROXY` 需 Node ≥ 24**（工具自己的提示文本就这么写：`provision.mjs:253`） |
 | 仅排障用 Python | Python 3（`hashlib` / `struct` / `sys`，无 pip 包） | 只服务 `tools/elf-inspect.py`；门禁不依赖它（`provision.mjs:85` 注释点明「不依赖 python/llvm」） |
 | 目标 ABI | `arm64-v8a`（AArch64） | 只做真机；x86_64 明确不做（`openItems[2]`） |
@@ -53,7 +54,7 @@
 | **S7 引导件不链接 libnode** | **相邻模块（002）**；本模块的投放顺序不假设任何链接关系 | — |
 | **S8 C 侧接口 5 个**（2026-10-17 扩充） | **不适用** | — |
 | **S9 日志双通道** | **类推适用**：progress 走 stdout、失败走 stderr；`--quiet` 只静默 stdout（**不静默失败**） | `provision.mjs:47-49` |
-| **S10 二进制不入库** | **合规（本模块的核心）**：120.9 MiB 产物**只**存在于 `../ohos-node-runtime/`（父工程 `.gitignore`）与消费方 `libs/<abi>/`；仓库里只有锁文件 + 工具；HAR 侧另有 `library/.ohpmignore:11` | 附录 G.1 · STRUCTURE §8 |
+| **S10 二进制不入库** | **合规（本模块的核心）**：120.9 MiB 产物**只**存在于仓库内 `runtime/`（`.gitignore`：`/runtime/**/*.so`；README/SHA256SUMS/PROVENANCE 等元数据入库）与消费方 `libs/<abi>/`；仓库里锁文件 + 工具 + 元数据入库、`*.so` 不入库；HAR 侧另有 `library/.ohpmignore:11` | 附录 G.1 · STRUCTURE §8 |
 | **G3 不含浏览器内核** | 不引入任何渲染物 | — |
 | **G4 第三方许可随包** | 本模块**提供素材**（`source.license` + `sha256`）；⚠️ 真正随包的清单文件仍缺（TECH §5-6） | §9.3 第 2 项 |
 | **G5 ELF 合规** | 明确「HAP 内原生库**不需要** `.codesign`」⇒ 默认不签；`--sign` 只服务独立分发 | §D.6/§D.9 · R22 关闭 |
@@ -192,7 +193,7 @@ PIE 产物**能 `dlopen` 成功**，但 V8 在 `Isolate::Initialize` 的**首次
 | | `from` | 来源类别（`"ohos-sdk"`） | `ohos-sdk` | ⚠️ 无工具读 |
 | | `sdkRelPath` | SDK 内相对路径 | `native/llvm/lib/aarch64-linux-ohos/libc++_shared.so` | `provision.mjs:199` |
 | | `abi` | 适用 ABI | `arm64-v8a` | ⚠️ 无工具读（D-12） |
-| `localStore` | `path` | 缓存目录（相对**仓库根**） | `../ohos-node-runtime` | `provision.mjs:77` |
+| `localStore` | `path` | 缓存目录（相对**仓库根**） | `runtime`（v0.11 前为 `../ohos-node-runtime`） | `provision.mjs:89` |
 | | `envOverride` | 覆盖用环境变量名 | `OHOS_NODE_RUNTIME_DIR` | `provision.mjs:74` |
 | | `layout` | 目录/命名约定的**人读**描述 | `node-<version>/<上游资产原名>.so + SHA256SUMS` | ⚠️ 无工具读 |
 
@@ -263,7 +264,7 @@ PIE 产物**能 `dlopen` 成功**，但 V8 在 `Isolate::Initialize` 的**首次
 | 输入 | 形式 | 用途 / 约束 | 落点 |
 |---|---|---|---|
 | 上游 release URL | `source.url`（`https://github.com/electerm/ohos-node-shared/releases/download/ohos-node-shared-v24.2.0/libnode-arm64.so`） | `--download` 的最后一档；`fetch` + `redirect:'follow'`；非 2xx ⇒ 抛错并尝试下一个来源 | `:216-226,239` |
-| 本地运行时缓存 | `localStore.path`（`../ohos-node-runtime`），或 **`OHOS_NODE_RUNTIME_DIR`** 覆盖 | 三个候选布局依次探测；命中即不联网 | `:73-82` |
+| 本地运行时缓存 | `localStore.path`（`runtime`，仓库内），或 **`OHOS_NODE_RUNTIME_DIR`** 覆盖 | 三个候选布局依次探测；命中即不联网 | `:90-94` |
 | ohos-sdk 路径 | `--sdk` > `OHOS_SDK_NATIVE/../../..` > `DEVECO_SDK_HOME/default/openharmony` > 两个硬编码本机路径 | 取其 `libcxx.sdkRelPath`；**本机实测 `DEVECO_SDK_HOME` 命中** | `:198-212` |
 | 代理开关 | `HTTPS_PROXY`/`HTTP_PROXY`（大小写均认）+ **`NODE_USE_ENV_PROXY=1`** | 内置 `fetch` 默认**不读**代理变量；只检测到代理未开开关时打印可粘贴命令 | `:247-256` |
 | 校验和自证 | `<缓存>/SHA256SUMS`（`sha256sum -c`） | 缓存目录自证工具，不属门禁 | 缓存 `README.md` |
@@ -401,10 +402,10 @@ descriptor(256 B)：[0]=1 version · [1]=1 SHA-256 · [2]=12 log2BlockSize · [3
 | `tests/README.md` | **28** | 1,108 B | ✅ | 三层测试现状 + 快速自检命令 |
 | `library/.ohpmignore` | 17 | — | ✅ | `:11` 排除 `**/libnode.so`（S10 兜底） |
 | `specs/README.md` | 25 | — | ✅ | 模块编号表（`:21` 记 `005-provision-verify` ⚠️） |
-| `../ohos-node-runtime/README.md` | — | 4,507 B | ✅（**不入 git**） | 缓存目录约定 + 重新填充步骤 |
-| `../ohos-node-runtime/SHA256SUMS` | 1 | 96 B | ✅ | `sha256sum -c` 可自证 |
-| `../ohos-node-runtime/node-v24.2.0/libnode-arm64.so` | — | 126,809,264 B | ✅ | 待投放的原始产物（**未签名**） |
-| `../ohos-node-runtime/node-v24.2.0/PROVENANCE.md` | 111 | 5,540 B | ✅ | 该版本溯源 + 门禁 + 真机验证（⚠️ 见 D-13） |
+| `runtime/README.md` | — | 4.6 KB | ✅（**入 git**；v0.11 前在父工程 `../ohos-node-runtime/`，整体不入 git） | 缓存目录约定 + 重新填充步骤 |
+| `runtime/SHA256SUMS` | 1 | 96 B | ✅（入 git） | `sha256sum -c` 可自证 |
+| `runtime/node-v24.2.0/libnode-arm64.so` | — | 126,809,264 B | ✅（**不入 git**，`/runtime/**/*.so`） | 待投放的原始产物（**未签名**） |
+| `runtime/node-v24.2.0/PROVENANCE.md` | 111 | 5,540 B | ✅（入 git） | 该版本溯源 + 门禁 + 真机验证（⚠️ 见 D-13） |
 | `tools/build-bridge.mjs` · `tools/smoke-host.mjs` · `tools/rt-build/` | — | — | ⬜ | 规划 §7.2/§7.4 列出的路径，**当前不存在**（见 D-2） |
 
 ---
@@ -413,7 +414,7 @@ descriptor(256 B)：[0]=1 version · [1]=1 SHA-256 · [2]=12 log2BlockSize · [3
 
 | 路线 | 内容 | 当前状态 | 触发条件 / 启动后要做的事 |
 |---|---|---|---|
-| **A. 现状（本地目录 + 锁文件）** | 本机/内网跑 `provision.mjs` 投放，**离线可用** | ✅ **生效中**（本机 `../ohos-node-runtime/` 已就位，`--check` 全过） | 无（默认路线） |
+| **A. 现状（仓库内缓存目录 + 锁文件）** | 本机/内网跑 `provision.mjs` 投放，**离线可用** | ✅ **生效中**（仓库内 `runtime/` 已就位，`--check` 全过） | 无（默认路线） |
 | **B. 公开镜像 Release** | 新建 `fellow99/ohos-node-runtime` 的 Release，资产**逐字节复制**上游 + 附 `SHA256SUMS` | ⬜ **未启动**：`mirror.kind = null`；`openItems[0]` 登记 | 触发：**第三方（ohpm 使用者）需要自己拿产物**。动作：① 建 Release（只做可访问镜像，**不重编译**）；② 回填 `lock.runtimes[].mirror`；③ 删 `openItems[0]`；④ 回归 `--download` 的回退链（当前只有一档，D-7） |
 | **C. 自建配方** | 走附录 D 配方（`--openssl-no-asm --shared`、条件 `--v8-disable-temporal-support`、V8 `maglev-assembler.h` release 补丁 + `-DNDEBUG`、版本补丁 `0001/0002` + `-Wno-error=implicit-function-declaration`、`CC/CXX` 带 `-fno-emulated-tls`，随后 `llvm-strip` → 自签） | ⬜ **未启动**：`tools/rt-build/` 不存在；配方只在规划附录 D 归档；`openItems[1]` 登记 | 触发：**需要非 v24.2.0 版本 / 供应链必须自控**。动作：① vendor 配方进 `tools/rt-build/`；② 产物先过七项门禁 + 真机探针（`verifiedOn` 写回）；③ 进 `runtimes[]`（R20 由此关闭） |
 | （附）**x86_64** | 模拟器用 ABI | ⬜ **决策不做**（只用真机调试）；`openItems[2]` | 触发：真的需要在模拟器上跑（需重走「候选产物评估 + 门禁 + 真机/模拟器验证」） |
@@ -440,6 +441,6 @@ descriptor(256 B)：[0]=1 version · [1]=1 SHA-256 · [2]=12 log2BlockSize · [3
 | **D-10** | 🟥 | **`elf-inspect.py` 的 FAIL 仍返回 0**，且其「六项」名不副实 | `elf-inspect.py`（历史：`:155-165` `return 0`） | ✅ **已修（A2/R2，2026-10-17）**：退出码 `0` = VERDICT PASS、`2` = VERDICT FAIL/非 ELF/32 位；docstring 已写清「4 项判定 + 3 项打印 + 退出码」；`smoke-host` 阶段② 解析 stdout 不受影响（实测 SMOKE: PASS） |
 | **D-11** | 🟨 | **清理只挂 `process.on('exit')`**：SIGINT/SIGTERM 不触发 ⇒ 强杀可能留下 `%TEMP%\libnode-sign-<pid>\`（~254 MB）。实测被 SIGTERM 杀掉时**无残留**，因为下载是「先缓冲后一次落盘」 | `provision.mjs:34-38` | 加 `process.on('SIGINT'|'SIGTERM')` 走同一清理函数；或把工作目录改成「进程退出即删」的 `fs.mkdtemp` 语义 |
 | **D-12** | 🟨 | **一批锁字段无任何工具读取**（只写文档，易漂移）：`schema` · `soname` · `nodeModuleVersion` · `embeds` · `flags` · `signed` · `verifiedOn/Device/Notes` · `openItems` · `libcxx.from/abi` · `localStore.layout` · **`gates.*`（七项全部）** | `grep -c` 结果：这些键在 `tools/*` 里 0 命中（`soname` 仅在 `elf-inspect.py` 被打印） | 明确它们是「审计/人读字段」并在本规格登记（已做）；若要防漂移，加一个 `--verify-lock` 子命令（用 `soname`/`nodeModuleVersion`/`gates` 交叉核对产物）——**当前不存在** |
-| **D-13** | 🟨 | **缓存目录 `PROVENANCE.md §3` 的数字是「加段后」的状态**：它写 `SHT 数量 29（e_shoff=126812160）`，而原始资产是 `e_shoff=126807472`、`e_shnum=28`（`126812160` 恰好是 `.codesign` 的页对齐落点）；`DT_NEEDED` 写成 `lib.so`（实际是 `libc.so`） | `PROVENANCE.md:45-47` vs 本轮 `elf-inspect.py` 原始产物输出 | 修 PROVENANCE（把「加段后」与「原件」两组数字分开写）——注意它不在本仓库内（父工程缓存目录） |
+| **D-13** | 🟨 | **缓存目录 `PROVENANCE.md §3` 的数字是「加段后」的状态**：它写 `SHT 数量 29（e_shoff=126812160）`，而原始资产是 `e_shoff=126807472`、`e_shnum=28`（`126812160` 恰好是 `.codesign` 的页对齐落点）；`DT_NEEDED` 写成 `lib.so`（实际是 `libc.so`） | `PROVENANCE.md:45-47` vs 本轮 `elf-inspect.py` 原始产物输出 | 修 PROVENANCE（把「加段后」与「原件」两组数字分开写）——文件现位于仓库内 `runtime/node-v24.2.0/PROVENANCE.md`（2026-10-18 前在父工程缓存目录） |
 | **D-14** | 🟩 | **`needsLibc`（`libc.so`）计算后未使用**（`provision.mjs:133`）：只有一个布尔被算出来却从不参与门禁/输出 | 逐行读码 | 删掉，或纳入附加信息打印（`reportGates` 的 `附加：` 行） |
 | **D-15** | 🟨 | **上游产物只有 v24.2.0 一个版本**（R20）且来源是**无法复现的黑盒二进制**（R8）：这是**被接受的**风险，不是缺陷；但它意味着「换版本」目前无路可走 | 锁文件 `runtimes[]` 长度 1 · §9.3 第 2 项 | 保持登记；需要新版本时启动 §9 路线 C |

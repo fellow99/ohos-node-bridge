@@ -15,7 +15,7 @@
 ```bash
 # ① 投放 Node 运行时（121 MB，不入库；七项 ELF 门禁 + SHA-256 硬校验）
 node tools/provision.mjs --out samples/minimal-app/libs/arm64-v8a
-#    本地来源默认 ../ohos-node-runtime；没有就 --download（国内需代理）或 --from <path|url>
+#    本地来源默认 runtime/（仓库内，仅 *.so 不入库）；没有就 --download（国内需代理）或 --from <path|url>
 
 # ② 签名（二选一）
 #    a) DevEco：File → Project Structure → Signing Configs → 勾选自动生成（需登录）→ 直接写进 build-profile.json5

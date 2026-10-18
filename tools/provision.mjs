@@ -86,7 +86,7 @@ if (flag('list')) {
 const ENV_DIR = process.env[lock.localStore?.envOverride ?? 'OHOS_NODE_RUNTIME_DIR'];
 const localStoreAbs = ENV_DIR
   ? resolve(ENV_DIR)
-  : resolve(REPO, lock.localStore?.path ?? '../ohos-node-runtime');
+  : resolve(REPO, lock.localStore?.path ?? 'runtime');
 const localCandidates = [
   join(localStoreAbs, `node-${entry.node}`, entry.file),   // 目录布局：node-v24.2.0/libnode-arm64.so
   join(localStoreAbs, entry.node, entry.file),

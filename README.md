@@ -4,10 +4,10 @@
 > `NAPI 引导 + dlopen + node::Start` 的形态嵌进 **HarmonyOS 应用自己的进程**，
 > 封装成可发布到 [ohpm](https://ohpm.openharmony.cn/) 的 **ArkTS 组件库**。
 
-它不是应用，而是**应用里的 Node.js 脚本环境**。唯一在册消费方：`pi-desktop-ark`
-（**Pi Desktop · HarmonyOS Edition**，应用名 `Pi Desktop V2`）——
-本库与它的**分工与对接契约**见 [`docs/000-工程规划.md`](docs/000-工程规划.md) §6；**应用侧的一切规划**在
-`../pi-desktop-ark/docs/000-工程规划.md`（本仓库不复制应用语义）。
+它不是应用，而是**应用里的 Node.js 脚本环境**，面向多个 HarmonyOS 工程复用，
+并计划发布到 [OpenHarmony 三方库中心仓（ohpm）](https://ohpm.openharmony.cn/)。
+库的设计与对接契约见 [`docs/000-工程规划.md`](docs/000-工程规划.md)（只讲库本身，
+不绑定任何具体应用的业务语义）。
 
 | 项 | 值 |
 | --- | --- |
@@ -15,13 +15,14 @@
 | 形态 | ArkTS 组件库（HAR）+ NAPI 引导件（`.so`）+ 运行时获取/校验工具链 |
 | 目标设备 | `2in1` / `tablet`（不做 phone） |
 | 运行时 | Node **v24.2.0**（`electerm/ohos-node-shared` 产物，SHA-256 锁定在 `runtime.lock.json`） |
-| 规划文档 | [`docs/000-工程规划.md`](docs/000-工程规划.md)（**v0.9**：只讲**库本身**；**结论以它为准**）· 消费方规划 → `../pi-desktop-ark/docs/000-工程规划.md` |
+| 规划文档 | [`docs/000-工程规划.md`](docs/000-工程规划.md)（**v0.11**：只讲**库本身**，**结论以它为准**）；规格见 [`specs/`](specs/) |
 
 ## 目录
 
 ```
 ohos-node-bridge/
 ├── runtime.lock.json     # ★ 运行时唯一事实源：版本 + SHA-256 + 门禁结果 + 真机验证记录（二进制不入库）
+├── runtime/              # 运行时产物本地缓存（node-v*/libnode-arm64.so；仅 *.so 不入库，README/校验/溯源入库）
 ├── library/              # ★ 发布到 ohpm 的 HAR（ArkTS + NAPI 引导件）
 ├── payload/              # Node 侧 JS：bootstrap 参考实现 + selfcheck 自检
 ├── tools/                # provision.mjs（投放/校验）· elf-inspect.py · ohos-selfsign.mjs
