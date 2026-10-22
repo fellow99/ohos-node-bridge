@@ -18,16 +18,17 @@
 
 ## 0. 一句话结论
 
-**两个包都已 `ohpm publish` 提交，正在中心仓审核。**（2026-10-22 更新）
+**两个包均已通过审核并上架。**（2026-10-22）
 
 | 包 | 版本 | 体积 | 本地门禁 | `ohpm prepublish` | 发布 | 当前状态 |
 |---|---|---|---|---|---|---|
-| `@fellow99/node-bridge` | `0.1.0` | 488 KB | ✅ 31/31（`tools/verify-har.mjs`） | ✅ succeed | ✅ 已 publish | **审核中**（公共搜索不可见） |
-| **`@fellow99/node-runtime`** | **`24.2.0`**（= Node 版本） | 41 MB | ✅ 34/34 | ✅ succeed | ✅ 已 publish | **审核中**（公共搜索不可见） |
+| [`@fellow99/node-bridge`](https://ohpm.openharmony.cn/#/cn/detail/@fellow99/node-bridge) | `0.1.0` | 488 KB | ✅ 31/31（`tools/verify-har.mjs`） | ✅ succeed | ✅ 已 publish | ✅ **已上架**（17:52） |
+| [`@fellow99/node-runtime`](https://ohpm.openharmony.cn/#/cn/detail/@fellow99/node-runtime) | **`24.2.0`**（= Node 版本） | 41 MB | ✅ 34/34 | ✅ succeed | ✅ 已 publish | ✅ **已上架**（17:50） |
 
-> **为什么公共接口查不到**：中心仓的流程是「`ohpm publish` 成功 → 生成**上架审核单** → 审核通过才上架」。
-> ✅ 实测口径：`search?condition=fellow99&sortedType=latest` 返回 `total: 0`；detail 接口返回 `{"body":"success"}`（= 未上架）。
-> 审核结果在【个人中心】-【消息】/【Package】看；**审核通过后** `ohpm install @fellow99/node-runtime@24.2.0` 才可用。
+> **上架验证（✅ 2026-10-22）**：detail 接口已返回两包元数据（`node-runtime@24.2.0` 17:50、`node-bridge@0.1.0` 17:52）；
+> **干净目录 `ohpm install` 两包实测成功**（16.6 s），且拉下来的 `libs/arm64-v8a/libnode.so`
+> SHA-256 = `3019bf5f…51a1`，与 `runtime.lock.json` 锁值**逐字一致** —— 发布链路全闭环。
+> 回顾：publish 成功后曾有约数小时「审核中」（当时 search `total: 0`、detail 返回 `{"body":"success"}`），审核通过即对外可见。
 
 过程中关掉的关键问题（都已实测闭环）：
 
@@ -38,7 +39,7 @@
 3. **方案 B 的链路真机验证过**：HAR 里的 `.so` → HAP（SHA 不变）→ `dlopen` 命中 `<bundleCodeDir>/libs/arm64/libnode.so` → `/facts` 200。
 4. **发布本身踩了两个坑**（都不是包的问题，已在 §8 固化成 runbook）：
    `-t latest` 被服务端拒绝；无 TTY 环境下 ohpm 因**私钥口令提示死循环**而 `heap out of memory`。
-5. **剩下的只有「人判」**：审核结果、审核问询材料（§6）、`libc++_shared.so` 双份择一（§10）。
+5. **审核已通过**；剩余仅维护性事项：`libc++_shared.so` 双份择一、`readme-zh` 英文版、兼容矩阵机读文件（§10）。
 
 > 本文保留完整的规则基线（§2）、实测证据（§3）、差距与处置（§4）、决策记录（§5）、审核材料（§6）、
 > 文件清单（§7）与**实际发布 runbook（§8）**；凡状态已变化的条目，正文里都以 ✅/⬜ 直接标注，不做历史抹除。
@@ -594,8 +595,8 @@ what is your passphrase of the private key:      ← 输入生成密钥时设的
 
 | # | 事项 | 说明 |
 |---|---|---|
-| 1 | 跟踪审核单 | 【个人中心】-【消息】/【Package】；**审核通过才上架** |
-| 2 | 验证上架 | `ohpm info @fellow99/node-runtime` 能查到版本，或公共 search 命中 |
+| 1 | 跟踪审核单 | ✅ 已通过（2026-10-22 当天上架） |
+| 2 | 验证上架 | ✅ 已验证：`ohpm info` 可查两包；干净目录 `ohpm install` 成功，`libnode.so` SHA = 锁值 |
 | 3 | 已上架后改文档 | README/CHANGELOG 有**单独更新入口**，不必重发 HAR（需审核；同一版本同时只允许 1 个审核中申请） |
 | 4 | 打 tag / 记录 | `git tag v24.2.0`、`git tag v0.1.0`；CHANGELOG 补发布日期 |
 | 5 | 回滚成本 | 全量下架后有 **24 小时冷却**，且**版本号不可重用** |
@@ -652,7 +653,7 @@ what is your passphrase of the private key:      ← 输入生成密钥时设的
 | 5 | `libc++_shared.so` 只在一处提供（§5.5 第 3 项）：现在主包与运行时包**各带一份**（HAP 内按路径去重，暂不出错） | 需拍板 | 包内容 / P1-1 |
 | 6 | **残余许可**：`ohos-node-shared` 构建脚本的 MIT 原文/版权行 | 人工（取上游文件） | 不影响 ohpm 上架，影响许可完备性 |
 | 7 | 主包是否也钉 `24.2.0`（本文建议不要） | 需拍板 | 两包版本策略 |
-| 8 | **审核结果**（两个审核单）：通过 / 补材料 / 驳回；若驳回，按 §8.5 决定重发版本号 | 人工（中心仓） | 上架与后续版本策略 |
+| 8 | ~~审核结果~~ ✅ **两包均已通过并上架**（2026-10-22） | — | — |
 | 9 | 审核说明材料由谁写、写多长 | 人工 | §6 |
 
 ---

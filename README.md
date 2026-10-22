@@ -19,8 +19,8 @@
 | **`@fellow99/node-bridge`** | 自身 semver | `0.1.0` | **488 KB** | ArkTS 字节码 + 类型 `.d.ets` + 引导件 `libnode_bridge.so` + `libnode_host_client.so` | **接口与加载器**：`NodeRuntime` 状态机、`HostBridge`（Node→ArkTS）、日志/崩溃取证；`dlopen` 引擎并调 `node::Start` |
 | **`@fellow99/node-runtime`** | **= Node 版本** | `24.2.0` | **41 MB** | `libs/arm64-v8a/libnode.so`（121 MB）+ `libc++_shared.so` + 版本常量 + Node 官方 LICENSE | **引擎本体**：V8/JIT、`node:http` 等全部内置模块；不提供任何 ArkTS API |
 
-> **发布状态（2026-10-22）**：两个包均已 `ohpm publish` 提交、**中心仓审核中**
-> （审核通过前公共搜索不可见；本地接入先用 `file:` 依赖或构建出的 `.har`）。
+> **发布状态**：✅ **两包均已上架**（2026-10-22）：[`@fellow99/node-bridge@0.1.0`](https://ohpm.openharmony.cn/#/cn/detail/@fellow99/node-bridge) · [`@fellow99/node-runtime@24.2.0`](https://ohpm.openharmony.cn/#/cn/detail/@fellow99/node-runtime)。
+> 已用干净目录 `ohpm install` 实测：两包可拉取，`libnode.so` SHA-256 与锁值逐字一致。
 
 两者靠**运行期符号契约**咬合（不是编译期链接）：引导件只认 `_ZN4node5StartEiPPc`（`node::Start(int,char**)`）
 与 `napi_*`，因此**换 Node 版本不需要重编主包**（`specs/007` 的 `AC-007-11`，✅ 真机验证过）。
@@ -105,8 +105,7 @@ NodeRuntime.getInstance().start(getContext(this) as common.UIAbilityContext, {
 
 ## 发布到 ohpm
 
-> **状态（2026-10-22）**：两个包都已用 `ohpm publish` 提交，正在中心仓**审核**中
-> （审核通过前公共搜索不可见，`ohpm install` 还拉不到；本地接入请先用 `file:` 依赖或构建出的 `.har`）。
+> **状态**：✅ 已上架（2026-10-22）。干净目录 `ohpm install` 实测可拉取两包并构建。
 
 **一条命令自检**（版本一致性 → 投放运行时 → 两个 release HAR → 双门禁 → 双 `prepublish`）：
 

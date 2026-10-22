@@ -11,8 +11,7 @@
 
 ## 安装
 
-> **状态（2026-10-22）**：`0.1.0` 已提交中心仓审核。审核通过前 `ohpm install` 还拉不到，
-> 本地接入请先用 `"@fellow99/node-bridge": "file:<路径>/library"` 或构建出的 `.har`。
+> **状态**：`0.1.0` 已上架（2026-10-22，[详情页](https://ohpm.openharmony.cn/#/cn/detail/@fellow99/node-bridge)）。
 
 ```bash
 # ① 本包（ArkTS API + NAPI 引导件，约 0.5 MB）

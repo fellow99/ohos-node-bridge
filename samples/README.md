@@ -24,8 +24,8 @@ node tools/probe.mjs --preset 2       # 换档位（0/1/2，见 minimal-app/READ
 
 判据表与已知限制见 [`minimal-app/README.md`](./minimal-app/README.md) §4 / §6。
 
-> 两个包（`@fellow99/node-bridge@0.1.0` / `@fellow99/node-runtime@24.2.0`）已于 2026-10-22 提交中心仓审核；
-> 本仓库的样例仍走 `file:` 依赖，**离线可构建**，不依赖审核结果。
+> 两个包已于 2026-10-22 **上架**：[`@fellow99/node-bridge@0.1.0`](https://ohpm.openharmony.cn/#/cn/detail/@fellow99/node-bridge) / [`@fellow99/node-runtime@24.2.0`](https://ohpm.openharmony.cn/#/cn/detail/@fellow99/node-runtime)；
+> 样例仍走 `file:` 依赖，**离线可构建**。
 
 ## 在本仓库内自测时要记住的两件事
 
