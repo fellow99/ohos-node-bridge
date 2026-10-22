@@ -30,7 +30,11 @@ const HVIGORW = process.env.HVIGORW_BIN ?? 'D:\\oh-workspace\\command-line-tools
 const OHPM = process.env.OHPM_BIN ?? 'D:\\oh-workspace\\command-line-tools\\bin\\ohpm.bat';
 const isWin = process.platform === 'win32';
 
-const RUNTIME_MODULE = 'runtimehar';
+// ⚠️ 三件事不要混：module 标识符（给 `-p module=` 用）/ 源码目录名 / HAR 文件名。
+//    runtime-har 模块的标识符是 `runtimehar`（schema 不允许中划线），目录是 `runtime-har/`，
+//    产出的 HAR 叫 `runtimehar.har` —— 拼路径时**必须用目录名**，否则会去 `runtimehar/` 下找。
+const RUNTIME_MODULE = 'runtimehar';   // 给 hvigor 的 -p module=
+const RUNTIME_DIR = 'runtime-har';     // 给文件系统
 const BRIDGE_MODULE = 'library';
 const RUNTIME_PKG = '@fellow99/node-runtime';
 
@@ -73,8 +77,8 @@ const runtimeChangelog = join(ROOT, 'runtime-har/CHANGELOG.md');
 const runtimeIndex = join(ROOT, 'runtime-har/Index.ets');
 const bridgePkgPath = join(ROOT, 'library/oh-package.json5');
 const bridgeChangelog = join(ROOT, 'library/CHANGELOG.md');
-const harOf = (mod, name) => join(ROOT, mod, 'build/default/outputs/default', name);
-const RUNTIME_HAR = harOf(RUNTIME_MODULE, 'runtimehar.har');
+const harOf = (dir, name) => join(ROOT, dir, 'build/default/outputs/default', name);
+const RUNTIME_HAR = harOf(RUNTIME_DIR, 'runtimehar.har');
 const BRIDGE_HAR = harOf(BRIDGE_MODULE, 'library.har');
 
 function checkVersion() {
@@ -163,17 +167,27 @@ function build() {
 
 function printPublish() {
   section('⑦ 人工发布（顺序不能反：先运行时包，后主包）');
-  const q = (p) => (isWin ? p.replace(/\\/g, '\\\\') : p);
+  // 打印给人看/直接粘贴：Windows 路径用正斜杠（cmd 与 PowerShell 都接受），避免 `\\` 被再次转义
+  const q = (p) => (isWin ? p.replace(/\\/g, '/') : p);
   console.log(`
+# ⚠️ 必须在**交互式终端**里执行（CMD / PowerShell / Windows Terminal）：
+#    ohpm 发布时要用私钥口令签名，会现场提示
+#      what is your passphrase of the private key:
+#    在无 TTY 的环境（CI/脚本重定向）里它会反复重试直到内存耗尽而崩溃 —— 这不是包体积问题。
+#    也可以把口令写进配置以避免提示（明文存 ~/.ohpmrc，自行权衡）：
+#      ohpm config set key_passphrase <口令>
+#
+# ⚠️ 不要加 -t latest：服务端明确拒绝该 tag（cannot be latest）。
+
 # 凭据（一次性；发布码/私钥在中心仓个人中心取）
 ohpm config set publish_registry https://ohpm.openharmony.cn/ohpm
 ohpm config set publish_id <你的发布码>
 ohpm config set key_path <私钥路径>
 
-# ① 运行时包（必须先上架，主包的依赖才解得开）
-ohpm publish "${q(RUNTIME_HAR)}" -t latest
+# ① 运行时包（必须先上架）
+ohpm publish "${q(RUNTIME_HAR)}"
 # ② 主包
-ohpm publish "${q(BRIDGE_HAR)}" -t latest
+ohpm publish "${q(BRIDGE_HAR)}"
 
 # 之后在中心仓【个人中心】-【消息】/【Package】跟踪两个审核单。
 `);
