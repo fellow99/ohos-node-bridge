@@ -8,6 +8,9 @@
 ohpm install @fellow99/node-runtime@24.2.0
 ```
 
+> **状态（2026-10-22）**：`24.2.0` 已提交中心仓审核。审核通过前公共搜索不可见，
+> 本地接入请用 `"@fellow99/node-runtime": "file:<路径>/runtime-har"`，或直接 `ohpm publish` 产出的 `.har`。
+
 ## 这个包是什么
 
 | 项 | 值 |

@@ -18,12 +18,16 @@
 
 ## 0. 一句话结论
 
-**两个包都已就绪，只差账号与发布动作。**（2026-10-22 更新）
+**两个包都已 `ohpm publish` 提交，正在中心仓审核。**（2026-10-22 更新）
 
-| 包 | 版本 | 体积 | 本地门禁 | `ohpm prepublish` | 还缺什么 |
-|---|---|---|---|---|---|
-| `@fellow99/node-bridge` | `0.1.0` | 488 KB | ✅ 31/31（`tools/verify-har.mjs`） | ✅ succeed | 发布凭据 |
-| **`@fellow99/node-runtime`** | **`24.2.0`**（= Node 版本） | 41 MB | ✅ 34/34 | ✅ succeed | 发布凭据 |
+| 包 | 版本 | 体积 | 本地门禁 | `ohpm prepublish` | 发布 | 当前状态 |
+|---|---|---|---|---|---|---|
+| `@fellow99/node-bridge` | `0.1.0` | 488 KB | ✅ 31/31（`tools/verify-har.mjs`） | ✅ succeed | ✅ 已 publish | **审核中**（公共搜索不可见） |
+| **`@fellow99/node-runtime`** | **`24.2.0`**（= Node 版本） | 41 MB | ✅ 34/34 | ✅ succeed | ✅ 已 publish | **审核中**（公共搜索不可见） |
+
+> **为什么公共接口查不到**：中心仓的流程是「`ohpm publish` 成功 → 生成**上架审核单** → 审核通过才上架」。
+> ✅ 实测口径：`search?condition=fellow99&sortedType=latest` 返回 `total: 0`；detail 接口返回 `{"body":"success"}`（= 未上架）。
+> 审核结果在【个人中心】-【消息】/【Package】看；**审核通过后** `ohpm install @fellow99/node-runtime@24.2.0` 才可用。
 
 过程中关掉的关键问题（都已实测闭环）：
 
@@ -32,10 +36,12 @@
 2. **「第三方怎么拿到 `libnode.so`」这条链补上了**：运行时独立成包 `@fellow99/node-runtime`（内含 121 MB 的引擎），
    `ohpm install` 即得；主包 HAR 里再带 `runtime.lock.json` + 许可清单（rawfile）作为事实源。
 3. **方案 B 的链路真机验证过**：HAR 里的 `.so` → HAP（SHA 不变）→ `dlopen` 命中 `<bundleCodeDir>/libs/arm64/libnode.so` → `/facts` 200。
-4. **还剩的只有「人判」与「账号」**：`@fellow99` 组织/发布码/私钥、首发节奏（`-rc` 试水）、审核说明材料（§6）。
+4. **发布本身踩了两个坑**（都不是包的问题，已在 §8 固化成 runbook）：
+   `-t latest` 被服务端拒绝；无 TTY 环境下 ohpm 因**私钥口令提示死循环**而 `heap out of memory`。
+5. **剩下的只有「人判」**：审核结果、审核问询材料（§6）、`libc++_shared.so` 双份择一（§10）。
 
 > 本文保留完整的规则基线（§2）、实测证据（§3）、差距与处置（§4）、决策记录（§5）、审核材料（§6）、
-> 文件清单（§7）与流水线（§8）；凡状态已变化的条目，正文里都以 ✅/⬜ 直接标注，不做历史抹除。
+> 文件清单（§7）与**实际发布 runbook（§8）**；凡状态已变化的条目，正文里都以 ✅/⬜ 直接标注，不做历史抹除。
 
 ---
 
@@ -170,7 +176,7 @@ ohpm config set publish_registry https://ohpm.openharmony.cn/ohpm
 
 # ② 本地自检（✅ 本机可用）
 ohpm prepublish <har>          # 预校验包内容
-ohpm publish <har> -t latest   # 发布；成功后生成「上架审核单」
+ohpm publish <har>            # 发布（交互式输入私钥口令）；成功后生成「上架审核单」
 
 # ③ 审核：中心仓【个人中心】-【消息】/【Package】跟踪；通过后自动上架
 ```
@@ -227,6 +233,8 @@ package/src/main/ets/{bridge,log,runtime,util}/*.d.ets    ← 5 个类型声明�
 package/src/main/resources/rawfile/node_bridge/runtime.lock.json        3,374 B  ← ✅ 随包事实源
 package/src/main/resources/rawfile/node_bridge/THIRD-PARTY-NOTICES.md  10,824 B  ← ✅ 许可清单（G4）
 ```
+
+> 以上为 **2026-10-22 发布构建**的实测值；此后 README/CHANGELOG 有更新，重新 `assembleHar` 后体积会略有变化（gzip 时间戳与内容都会影响）。
 
 **主包里刻意没有 `libnode.so`**（门禁会硬性断言这一点），它由运行时包提供：
 
@@ -507,52 +515,114 @@ calling node::Start(argc=4) ...
 | 15 | `runtime.lock.json` | ⬜ 未做 | 增 `bridge.version` / `bridge.harSha256`；每项增 `ohpmPackage: "@fellow99/node-runtime@<node>"`；`mirror` 若要公开镜像则回填 | 版本矩阵可机读（FR-007-008） |
 | 16 | `specs/007-distribution-har-package/spec.md` | ⬜ 未做 | 把 §4 的 P0 项映射进 FR-007-005/008/010/015；**FR-007-003 改写**为「主包不含运行时；运行时由独立包提供」；新增 NFR「运行时包 ≈41 MB（压缩）」 | 现状列与实测一致 |
 | 17 | `docs/000-工程规划.md` §7.5 / §8 Phase 3 | ⬜ 未做 | 「首发」口径落成「双包 + 发布顺序」的可执行步骤与判据 | 与本文一致 |
+
 ---
 
-## 8. 建议的发布流水线（命令级）
+## 8. 实际发布 runbook（2026-10-22 实跑通过）
 
-> 已封装成脚本：`node tools/release.mjs --check-version` / `--build` / `--print-publish`（见 §7 第 10–11 项）。
-> 下面是它内部等价的手工命令，便于排障。
+> 本节是**照着做就能发**的步骤，不是设计稿：每一步都在本机执行过，两道坑也是当天踩出来的。
+
+### 8.1 一次性前置（只做一次）
+
+| # | 事项 | 位置 / 命令 |
+|---|---|---|
+| 1 | 账号登录 | <https://ohpm.openharmony.cn> |
+| 2 | 创建**个人组织** `fellow99`（组织名必须 = scope；创建者自动为成员） | 【个人中心】-【组织管理】-【新增】 |
+| 3 | 生成密钥（**必须设口令**，ohpm 只支持加密密钥） | `ssh-keygen -m PEM -t RSA -b 4096 -f ~/.ssh_ohpm/ohpm-key` |
+| 4 | 上传**公钥** `ohpm-key.pub` 的内容 | 【个人中心】-【认证管理】-【新增】 |
+| 5 | 复制**发布码** | 【个人中心】首页「复制发布码」 |
 
 ```bash
-# 0. 环境（与本仓库既有约定一致）
+ohpm config set publish_registry https://ohpm.openharmony.cn/ohpm
+ohpm config set publish_id   <发布码>
+ohpm config set key_path     ~/.ssh_ohpm/ohpm-key
+ohpm ping                    # 期望 PONG {"success":true}
+```
+
+> 配置落在 `C:\Users\<你>\.ohpm\.ohpmrc`。**不需要实名认证**：「认证管理」= SSH 公钥；
+> 「企业实名认证」只在你创建**企业组织**时才要求（个人开发者不能建企业组织）。
+
+### 8.2 出包 + 自检（一条命令）
+
+```bash
+cd ohos-node-bridge
 export DEVECO_SDK_HOME='D:\oh-workspace\command-line-tools\sdk'
 export PATH="/d/oh-workspace/DevEco Studio/tools/node:$PATH"
 
-# 1. 版本一致性（新脚本承担）：runtime 包 version = runtime.lock.json 的 active = 两个 CHANGELOG 首条
-node tools/release.mjs --check-version
-
-# 2. 投放运行时进运行时包（幂等；✅ 七项门禁 + SHA-256 硬校验）
-node tools/provision.mjs --out runtime-har/libs/arm64-v8a
-
-# 3. 两个 module 各出 release HAR（主包 ✅ 实测 ~22–32 s / 486 KB；运行时包 ≈41 MB）
-cmd //c "D:\\oh-workspace\\command-line-tools\\bin\\hvigorw.bat --mode module -p module=library@default     -p buildMode=release assembleHar --no-daemon"
-cmd //c "D:\\oh-workspace\\command-line-tools\\bin\\hvigorw.bat --mode module -p module=runtimehar@default -p buildMode=release assembleHar --no-daemon"
-
-# 4. 本地发布门禁（新脚本，复刻服务端规则；两个包都跑）
-node tools/verify-har.mjs library/build/default/outputs/default/library.har
-node tools/verify-har.mjs runtime-har/build/default/outputs/default/runtimehar.har
-#   共用断言：四件套齐 / README 含 ohpm install / CHANGELOG 含版本 / metadata.debug===false /
-#            无 .exe、无 signing.*、无 *.p12 / libs/*.so 均被 nativeComponents 覆盖 / 大小 < 500 MB
-#   运行时包专属：libs/arm64-v8a/libnode.so 的 SHA-256 与大小 = lock、version = lock.active
-
-# 5. ohpm 预校验（✅ 本机可用；注意它不覆盖四件套，见 §2.8）
-cmd //c "D:\\oh-workspace\\command-line-tools\\bin\\ohpm.bat prepublish runtime-har\\build\\default\\outputs\\default\\runtimehar.har"
-cmd //c "D:\\oh-workspace\\command-line-tools\\bin\\ohpm.bat prepublish library\\build\\default\\outputs\\default\\library.har"
-
-# 6. 发布（需要人工凭据，脚本只打印命令不代跑）
-#    ohpm config set publish_registry https://ohpm.openharmony.cn/ohpm
-#    ohpm config set publish_id <个人中心发布码>;  ohpm config set key_path <私钥>
-#    ★ 顺序：**先运行时包，后主包**（主包引用 24.2.0；反过来会在 install 时找不到依赖）
-cmd //c "D:\\oh-workspace\\command-line-tools\\bin\\ohpm.bat publish runtime-har\\build\\default\\outputs\\default\\runtimehar.har -t latest"
-cmd //c "D:\\oh-workspace\\command-line-tools\\bin\\ohpm.bat publish library\\build\\default\\outputs\\default\\library.har -t latest"
-
-# 7. 审核跟踪：中心仓【个人中心】-【消息】/【Package】；通过后上架
-#    文档类更新（README/CHANGELOG）走单独更新入口，不必重发 HAR
+node tools/release.mjs --all
 ```
 
+`--all` 内部等价于下列 5 步（失败即退出码 2，不会继续）：
+
+| 步 | 做什么 | 对应命令 |
+|---|---|---|
+| ① | 版本一致性：runtime 包 version = `runtime.lock.json.active` = CHANGELOG 首条 = `Index.ets` 常量；rawfile 副本与仓库根逐字一致；已投放 `.so` 的 SHA/大小 = 锁值 | `node tools/release.mjs --check-version` |
+| ② | 投放运行时进运行时包（幂等；七项 ELF 门禁 + SHA-256） | `node tools/provision.mjs --out runtime-har/libs/arm64-v8a` |
+| ③ | 两个 module 各出 release HAR（主包 ≈488 KB / 运行时包 ≈41 MB） | `hvigorw --mode module -p module=library@default -p buildMode=release assembleHar` ＋ `-p module=runtimehar@default` |
+| ④ | 本地发布门禁（复刻服务端规则，硬失败） | `node tools/verify-har.mjs <har>`（主包 31 项 / 运行时包 34 项） |
+| ⑤ | ohpm 预校验（第二道；**不覆盖四件套**，见 §2.8） | `ohpm prepublish <har>` |
+
+全部通过时的特征：`✓ 34 项全过`、`✓ 31 项全过`、两条 `prepublish ... succeed`。
+`verify-har` 会打印 `WARN libs/*.so 均被 nativeComponents 声明` 与 `contains source code`，两者都不阻断（§3.4）。
+
+### 8.3 发布（**必须交互式终端**，顺序不能反）
+
+```bash
+# ① 运行时包先上架（主包 README 指向它）
+ohpm publish runtime-har/build/default/outputs/default/runtimehar.har
+
+# ② 主包
+ohpm publish library/build/default/outputs/default/library.har
+```
+
+执行时会提示：
+
+```text
+what is your passphrase of the private key:      ← 输入生成密钥时设的口令（不回显）
+```
+
+成功后各生成一张**上架审核单**（【个人中心】-【消息】/【Package】跟踪）。
+
+#### ⚠️ 两道坑（2026-10-22 实跑撞到）
+
+| 坑 | 现象 | 根因 | 处理 |
+|---|---|---|---|
+| **不要加 `-t latest`** | `00623001 Tag Invalid Error: ... cannot be "latest"` | 服务端把 `latest` 当保留字，禁止手工打该 tag | **去掉 `-t`**，用默认 tag |
+| **不要在没有 TTY 的环境发** | 约 190 s 后 `FATAL ERROR: ... JavaScript heap out of memory`（3.96 GB） | **不是包太大**：`--debug` 显示它在反复索要口令（`Start getting passphrase from CLI`）→ 读不到 → 重试 → 内存耗尽 | ① 在 CMD/PowerShell/Windows Terminal 手动发（推荐）；② 或先 `ohpm config set key_passphrase <口令>`（明文存 `~/.ohpmrc`，用完 `ohpm config delete key_passphrase` 清掉） |
+
+### 8.4 发布后
+
+| # | 事项 | 说明 |
+|---|---|---|
+| 1 | 跟踪审核单 | 【个人中心】-【消息】/【Package】；**审核通过才上架** |
+| 2 | 验证上架 | `ohpm info @fellow99/node-runtime` 能查到版本，或公共 search 命中 |
+| 3 | 已上架后改文档 | README/CHANGELOG 有**单独更新入口**，不必重发 HAR（需审核；同一版本同时只允许 1 个审核中申请） |
+| 4 | 打 tag / 记录 | `git tag v24.2.0`、`git tag v0.1.0`；CHANGELOG 补发布日期 |
+| 5 | 回滚成本 | 全量下架后有 **24 小时冷却**，且**版本号不可重用** |
+
+### 8.5 失败重试策略（版本号不可重用）
+
+运行时包版本被 Node 版本锁死，而 ohpm 版本一旦发布不能覆盖。若 `24.2.0` 被审核驳回：
+
+| 选择 | 后果 |
+|---|---|
+| `24.2.0-1`（预发布标签） | 合法且仍能与 Node 版本对应，但排序低于 `24.2.0`，消费者需显式指定 |
+| `24.2.1` | 会被误读成「Node 24.2.1」，**不推荐** |
+| 内容改完后仍发 `24.2.0` | ❌ 不可能（版本已占用） |
+
+⇒ 因此**首发前必须把 §8.2 全绿跑完**；主包 `0.1.x` 试错成本低（改 `0.1.1` 即可）。
+
+### 8.6 验收口径（发布是否真的成功）
+
+| 判据 | 命令 / 位置 |
+|---|---|
+| 本地：两包门禁 + prepublish 全过 | `node tools/release.mjs --all`（退出码 0） |
+| 远端：publish 打印 success 并生成审核单 | 【个人中心】-【消息】 |
+| 上架：`ohpm info <包>` 可查到该版本 | 命令行 / 详情页 |
+| 消费方：装两包 → `assembleHap` → HAP 内 `libs/arm64-v8a/libnode.so` SHA = `3019bf5f…51a1` → `/facts` 200 | 见 §5.6 实测 |
+
 **纪律**：`tools/verify-har.mjs` 必须是**硬失败**（退出码非 0）而不是告警——它替代的是「服务端才会告诉你」的那部分校验；
-**发布顺序不能反**（运行时包先上架，主包的依赖才解得开）。
+**发布顺序不能反**（运行时包先上架）。
 
 ---
 
@@ -575,14 +645,14 @@ cmd //c "D:\\oh-workspace\\command-line-tools\\bin\\ohpm.bat publish library\\bu
 
 | # | 事项 | 归属 | 阻塞什么 |
 |---|---|---|---|
-| 1 | `@fellow99` 组织是否已在中心仓注册、谁入组；`publish_id`/私钥谁持有 | 人工（账号） | 一切发布动作 |
+| 1 | ~~`@fellow99` 组织 / 发布码 / 私钥~~ ✅ 已完成（个人组织 `fellow99` + 公钥上传 + `publish_id` 配置，`ohpm ping` PONG）；**残余**：私钥口令只在发布时交互输入，未落配置 | — | — |
 | 2 | ~~`repository` 填哪个 URL~~ ✅ 已定：`https://github.com/fellow99/ohos-node-bridge`（两个包都已填） | — | — |
 | 3 | ~~`author.email` / `author.url`~~ ✅ 已定：`fellow99@163.com` / `https://fellow99.github.io/`（两个包都已填，`author` 改为对象） | — | — |
 | 4 | ~~运行时随包与否（A/B/C）~~ → **已定 B**（2026-10-22）；残余待确认：主包是否写死依赖（§5.4 ①/②） | 需拍板 | P0-5、spec 007 修订 |
 | 5 | `libc++_shared.so` 只在一处提供（§5.5 第 3 项）：现在主包与运行时包**各带一份**（HAP 内按路径去重，暂不出错） | 需拍板 | 包内容 / P1-1 |
 | 6 | **残余许可**：`ohos-node-shared` 构建脚本的 MIT 原文/版权行 | 人工（取上游文件） | 不影响 ohpm 上架，影响许可完备性 |
 | 7 | 主包是否也钉 `24.2.0`（本文建议不要） | 需拍板 | 两包版本策略 |
-| 8 | 首发是否用 `-rc` 试水；被拒后的重发节奏（版本不可重用，尤其运行时包） | 人工 | 版本号消耗 |
+| 8 | **审核结果**（两个审核单）：通过 / 补材料 / 驳回；若驳回，按 §8.5 决定重发版本号 | 人工（中心仓） | 上架与后续版本策略 |
 | 9 | 审核说明材料由谁写、写多长 | 人工 | §6 |
 
 ---

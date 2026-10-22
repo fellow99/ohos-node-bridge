@@ -19,6 +19,9 @@
 | **`@fellow99/node-bridge`** | 自身 semver | `0.1.0` | **488 KB** | ArkTS 字节码 + 类型 `.d.ets` + 引导件 `libnode_bridge.so` + `libnode_host_client.so` | **接口与加载器**：`NodeRuntime` 状态机、`HostBridge`（Node→ArkTS）、日志/崩溃取证；`dlopen` 引擎并调 `node::Start` |
 | **`@fellow99/node-runtime`** | **= Node 版本** | `24.2.0` | **41 MB** | `libs/arm64-v8a/libnode.so`（121 MB）+ `libc++_shared.so` + 版本常量 + Node 官方 LICENSE | **引擎本体**：V8/JIT、`node:http` 等全部内置模块；不提供任何 ArkTS API |
 
+> **发布状态（2026-10-22）**：两个包均已 `ohpm publish` 提交、**中心仓审核中**
+> （审核通过前公共搜索不可见；本地接入先用 `file:` 依赖或构建出的 `.har`）。
+
 两者靠**运行期符号契约**咬合（不是编译期链接）：引导件只认 `_ZN4node5StartEiPPc`（`node::Start(int,char**)`）
 与 `napi_*`，因此**换 Node 版本不需要重编主包**（`specs/007` 的 `AC-007-11`，✅ 真机验证过）。
 
@@ -100,19 +103,31 @@ NodeRuntime.getInstance().start(getContext(this) as common.UIAbilityContext, {
 > （版本与 SHA-256 由 `runtime.lock.json` 锁定）。**两种方式择一，不要同时放**同名 `.so`。
 > 注意：主包**不声明**对运行时包的依赖，两个包必须分别安装。
 
-## 发布到 ohpm（摘要）
+## 发布到 ohpm
+
+> **状态（2026-10-22）**：两个包都已用 `ohpm publish` 提交，正在中心仓**审核**中
+> （审核通过前公共搜索不可见，`ohpm install` 还拉不到；本地接入请先用 `file:` 依赖或构建出的 `.har`）。
+
+**一条命令自检**（版本一致性 → 投放运行时 → 两个 release HAR → 双门禁 → 双 `prepublish`）：
+
+```bash
+node tools/release.mjs --all
+```
+
+**发布两条命令**（必须**交互式终端**：ohpm 会提示输入私钥口令）：
 
 ```bash
 ohpm config set publish_registry https://ohpm.openharmony.cn/ohpm
 ohpm config set publish_id <中心仓个人中心的发布码>
 ohpm config set key_path <私钥>
 
-# ★ 顺序不能反：先运行时包，后主包
-ohpm publish runtime-har/build/default/outputs/default/runtimehar.har -t latest
-ohpm publish library/build/default/outputs/default/library.har -t latest
+# ★ 顺序不能反：先运行时包，后主包；也**不要**加 -t latest（服务端拒绝该 tag）
+# ⚠️ 无 TTY 环境（CI/重定向）会因口令提示死循环而 OOM —— 与包体积无关
+ohpm publish runtime-har/build/default/outputs/default/runtimehar.har
+ohpm publish library/build/default/outputs/default/library.har
 ```
 
-规则依据、必要文件、元数据口径、审核材料与未决事项：[`docs/提交到OpenHarmony三方库中心仓.md`](docs/提交到OpenHarmony三方库中心仓.md)。
+完整流程、两道坑的根因、失败重试策略与未决事项：[`docs/提交到OpenHarmony三方库中心仓.md`](docs/提交到OpenHarmony三方库中心仓.md)。
 
 ## 已知限制（实测结论，非推断）
 

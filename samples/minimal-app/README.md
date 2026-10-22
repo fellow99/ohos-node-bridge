@@ -25,6 +25,8 @@ node tools/provision.mjs --out runtime-har/libs/arm64-v8a
 #    两者都没有 ⇒ 构建**产出未签名包**（能编译、不能装机）
 ```
 
+> 两个包已于 2026-10-22 提交中心仓审核；样例刻意仍用 `file:` 依赖（离线可构建、不依赖审核结果）。
+
 `ohpm install` 会把 `file:../../library` 与 `file:../../runtime-har` 当成本地包现场打 HAR——
 **不需要**先把两个包发布到 ohpm。
 
