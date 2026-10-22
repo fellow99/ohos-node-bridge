@@ -1,0 +1,6 @@
+# Node.js 官方 LICENSE 必须**逐字**保存：
+#   · 它的 SHA-256（b58bb782…dafffe）已在 runtime-har/README.md 与
+#     docs/提交到OpenHarmony三方库中心仓.md 中对外公布；
+#   · 它会被原样打进 @fellow99/node-runtime 包。
+# Windows 上 core.autocrlf=true 会在检出时改成 CRLF ⇒ 哈希与公布值不一致，故此关闭文本转换。
+runtime-har/LICENSE -text
