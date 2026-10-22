@@ -3,8 +3,14 @@
   "version": "0.1.0",
   "description": "在应用进程内嵌入真正的 Node.js 运行时（NAPI 引导 + dlopen + node::Start），供 ArkTS/ArkWeb 应用调用",
   "main": "Index.ets",
-  "author": "fellow99",
+  "author": {
+    "name": "fellow99",
+    "email": "fellow99@163.com",
+    "url": "https://fellow99.github.io/"
+  },
   "license": "MIT",
+  "sourceType": "open",
+  "repository": "https://github.com/fellow99/ohos-node-bridge",
   "keywords": [
     "nodejs",
     "harmonyos",
