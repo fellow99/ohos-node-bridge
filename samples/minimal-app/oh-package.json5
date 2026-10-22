@@ -6,6 +6,8 @@
   // 依赖走**相对路径**指向库源码：这样 `ohpm install` 会用仓库里的 library 现场打 HAR，
   // 不需要先发布到 ohpm（离线可构建）。
   "dependencies": {
-    "@fellow99/node-bridge": "file:../../library"
+    "@fellow99/node-bridge": "file:../../library",
+    // 方案 B：运行时由独立包提供（libnode.so 随该 HAR 进入 HAP，不再需要手工投放）。
+    "@fellow99/node-runtime": "file:../../runtime-har"
   }
 }

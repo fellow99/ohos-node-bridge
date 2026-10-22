@@ -1,0 +1,10 @@
+# 发布到 ohpm 时**排除**的内容（相对 runtime-har/）
+#
+# 依据：docs/提交到OpenHarmony三方库中心仓.md §5（方案 B：运行时独立成包）。
+# ⚠️ `libs/` 里的 `libnode.so` 与 `libc++_shared.so` 是**本包的核心内容**，不得排除。
+build/
+.hvigor/
+.cxx/
+oh_modules/
+node_modules/
+*.har

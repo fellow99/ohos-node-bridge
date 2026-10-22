@@ -1,0 +1,18 @@
+{
+  "module": {
+    // ⚠️ module.name 有 pattern 约束（`^[a-zA-Z][0-9a-zA-Z_.]*$`，**不允许中划线**）——
+    //    目录名用 `runtime-har/`（可读），模块标识符必须写成 `runtimehar`（同 minimalapp 的处置）。
+    "name": "runtimehar",
+    "type": "har",
+    "deviceTypes": [
+      "2in1",
+      "tablet"
+    ]
+    // 刻意不写 description：HAR 资源与消费方资源合并时，$string 资源名会撞（同 library 模块的处置）。
+    // 也不声明任何权限：本包只是二进制的载体，运行时行为由 @fellow99/node-bridge 决定。
+    //
+    // 包内容（由 hvigor 打包）：
+    //   libs/arm64-v8a/libnode.so   ← 由 tools/provision.mjs 投放，SHA-256 锁定在 runtime.lock.json
+    //   ets/modules.abc + Index.d.ets ← 由本模块的 Index.ets 编译得到（版本常量）
+  }
+}

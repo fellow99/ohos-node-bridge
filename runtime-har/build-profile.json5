@@ -1,0 +1,11 @@
+{
+  "apiType": "stageMode",
+  // 纯资源库：没有 native 源码、没有 CMake —— `libs/arm64-v8a/libnode.so` 是**预编译产物**，
+  // 由 `node tools/provision.mjs --out runtime-har/libs/arm64-v8a` 投放（不入库）。
+  "buildOption": {},
+  "targets": [
+    {
+      "name": "default"
+    }
+  ]
+}
