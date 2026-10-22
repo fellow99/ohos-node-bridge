@@ -1,4 +1,8 @@
-# 载荷（Node 侧 JS，随库分发）
+# 载荷（Node 侧 JS，随**仓库**分发——不随 HAR）
+
+> ⚠️ 本目录**不在** `library/` 里，hvigor 只收 `library/` 内文件 ⇒ 这些脚本**不会**被打进发布包。
+> 消费方从本仓库取用/复制，放进自己的模块（`resources/resfile/<app>/` 首选）。
+> 主包 HAR 里随包的是**运行期线索**（`runtime.lock.json`、`THIRD-PARTY-NOTICES.md`，走 rawfile），不是本目录代码。
 
 本目录是**库自带的 Node 侧脚本**（纯 JS，不参与 ArkTS 编译，零 npm 依赖）：
 

@@ -4,7 +4,7 @@
 > 再用一个纯 JS 载荷（`rawfile/probe.js`）把「这台设备的这个进程里 Node 能用什么」一次问清。
 >
 > 它承接 Phase 0 探针的检查口径（同一套 `/facts`），并按库的分工重构：
-> ① 不自带任何原生件（引导件与运行时都不带），改为**消费本库的 HAR**（`file:../../library`）；
+> ① 不自带任何原生件（引导件与运行时都不带），改为**消费两个包**：主包 `file:../../library` + 运行时包 `file:../../runtime-har`；
 > ② 载荷写盘从只读的 `__dirname` 改到可写的 `<HOME>/payload`；
 > ③ 传参改为**档位索引**（`aa start --ps` 只送得动一个 token，多词 flags 会被截断——真机踩过）。
 
@@ -13,8 +13,10 @@
 ## 1. 一次性准备
 
 ```bash
-# ① 投放 Node 运行时（121 MB，不入库；七项 ELF 门禁 + SHA-256 硬校验）
-node tools/provision.mjs --out samples/minimal-app/libs/arm64-v8a
+# ① 运行时**不用手工投放**：样例的 oh-package.json5 已声明
+#      "@fellow99/node-runtime": "file:../../runtime-har"
+#    该模块里的 121 MB libnode.so 由（一次性）投放产生，不入库：
+node tools/provision.mjs --out runtime-har/libs/arm64-v8a
 #    本地来源默认 runtime/（仓库内，仅 *.so 不入库）；没有就 --download（国内需代理）或 --from <path|url>
 
 # ② 签名（二选一）
@@ -23,7 +25,12 @@ node tools/provision.mjs --out samples/minimal-app/libs/arm64-v8a
 #    两者都没有 ⇒ 构建**产出未签名包**（能编译、不能装机）
 ```
 
-`ohpm install --all` 会把 `file:../../library` 当成本地包现场打 HAR——**不需要**先把库发布到 ohpm。
+`ohpm install` 会把 `file:../../library` 与 `file:../../runtime-har` 当成本地包现场打 HAR——
+**不需要**先把两个包发布到 ohpm。
+
+> 也可以走「纯离线」形态：不装运行时包，改把 `.so` 直接投放到本模块
+> `node tools/provision.mjs --out samples/minimal-app/libs/arm64-v8a`，同时删掉上面那条依赖。
+> **两种方式择一**，别让同名 `.so` 出现两份。
 
 ## 2. 构建 / 装机 / 取证（一条命令）
 
@@ -89,4 +96,4 @@ curl -s http://127.0.0.1:15577/facts | head -40
 - **档 1 在本机必崩**：Profile 无 JIT ACL ⇒ `CRASH sig=5`。这是**平台前置**，不是样例 bug。
 - **jitless 下 `fetch` / WASM 全废**：所以档 0 的 `fetch_self` 永远是失败——这本身是判据。
 - **`aa start --ps` 只送得动一个 token**：多词 flags 会被截断/丢弃（表现是"选①跑②"）。故一律走 `probePreset`。
-- HAP ≈ 129 MB（其中 `libnode.so` ≈ 121 MB）；**不随库分发**，由 `tools/provision.mjs` 投放。
+- HAP ≈ 129 MB（其中 `libnode.so` ≈ 121 MB）；该文件**来自运行时包 `@fellow99/node-runtime`**（HAR 内 `libs/arm64-v8a/`，构建时由 hvigor 合并进 HAP），本模块不含它。

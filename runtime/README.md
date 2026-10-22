@@ -46,6 +46,11 @@ runtime/
 
 ```bash
 # 在 ohos-node-bridge/ 下执行；默认来源就是本目录（runtime/）
+
+# ①【发布路径】投进**运行时包**模块 —— 这是 @fellow99/node-runtime 的包内容
+node tools/provision.mjs --out runtime-har/libs/arm64-v8a
+
+# ②【离线 / 探针路径】直接投进消费方或样例模块（与 ① 择一）
 node tools/provision.mjs --out samples/minimal-app/libs/arm64-v8a
 node tools/provision.mjs --check          # 只校验、不投放
 node tools/provision.mjs --list           # 打印锁定的运行时可选项

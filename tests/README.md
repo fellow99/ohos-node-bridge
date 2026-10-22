@@ -77,7 +77,8 @@ hdc shell hilog -x | grep -E "node-bridge|Cpp Crash"     # 辅助留档（**不�
 | ① JIT（无 ACL） | `--no-verify-heap` | ❌ `CRASH sig=5`（SIGTRAP），`si_addr == pc`，系统判 `Cpp Crash` |
 | ①′ JIT（无 ACL + 两个开放权限） | 同上 | ❌ **仍 SIGTRAP** ⇒ 开放权限**不能**替代 ACL |
 | ② 解释器 | `--jitless --no-verify-heap` | ✅ 全绿：`platform=openharmony`、`arch=arm64`、`versions={v8 13.6.233.10-node.17, uv 1.51.0, modules 137}`；`/facts` 200；`fs_write_readback=OK`；`worker_threads=true`；`os.networkInterfaces()` 含 `lo`；`os.cpus()` 长度 0；`cwd=/`；`execPath=/system/bin/appspawn`；热循环 **299 ms / 5 轮**（§D.9 复验 296 ms）；`spawn` 的 `data`/`exit`/`close` 三事件齐全 |
-| ②′ 锁定产物复验 | 同 ② | ✅ HAP 内 `libnode.so` SHA-256 = 锁值；`hilog` 中 `xpm`/`unsigned file` **0 命中**；绝对路径 `dlopen` 全失败、**裸名成功** |
+| ②′ 锁定产物复验 | 同 ② | ✅ HAP 内 `libnode.so` SHA-256 = 锁值；`hilog` 中 `xpm`/`unsigned file` **0 命中**；`dlopen` 命中 **`<bundleCodeDir>/libs/arm64/libnode.so`**（`2026-10-22` 复测：`libs/arm64-v8a/` 与 `<bundleCodeDir>/libnode.so` 两个候选 `Operation not permitted`；早期「只认裸名」的结论已作废） |
+| ②″ **运行时包链路**（方案 B） | 同 ②，但 `libnode.so` **来自 `@fellow99/node-runtime` 的 HAR**（手工投放到样例模块的那份已删除） | ✅ `assembleHap` 后 HAP 内 `libs/arm64-v8a/libnode.so` SHA = 锁值；装机 `/facts` 200、`node v24.2.0`、`hotloop 301 ms/5 轮`、`fs_write_readback=OK` |
 | ③ 内部模块 | `--jitless --expose-internals --no-verify-heap` | ✅ `require('internal/modules/cjs/loader')` 成功 |
 | ④ ACL 生效（消费方真机） | 不带 `--jitless` | ✅ 无 `Cpp Crash`；`wasm.validate=true`；热循环 **6–9 ms / 2e6**（约 7–10× 提速） |
 

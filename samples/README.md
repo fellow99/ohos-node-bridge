@@ -11,12 +11,16 @@
 ## 一条命令跑样例（真机取证）
 
 ```bash
-# 前置：投放运行时（121 MB，不入库）
-node tools/provision.mjs --out samples/minimal-app/libs/arm64-v8a
+# 前置：运行时由**运行时包**提供（样例的 oh-package.json5 已声明 file:../../runtime-har）
+#       包内是 121 MB 的 libnode.so，需要先把它投放进该模块（不入库）：
+node tools/provision.mjs --out runtime-har/libs/arm64-v8a
 
 node tools/probe.mjs                  # 构建 → 装机 → 启动(档位 0) → 取 /facts → 落证据到 logs/<date>-probe/
 node tools/probe.mjs --preset 2       # 换档位（0/1/2，见 minimal-app/README.md §3）
 ```
+
+> 旧方式（把 `.so` 直接投进 `samples/minimal-app/libs/arm64-v8a`）仍可用，但**两种方式择一**：
+> 同时存在两份同名 `.so` 会让「这份到底从哪来」无法自证。
 
 判据表与已知限制见 [`minimal-app/README.md`](./minimal-app/README.md) §4 / §6。
 
