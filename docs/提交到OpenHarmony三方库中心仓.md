@@ -39,7 +39,7 @@
 3. **方案 B 的链路真机验证过**：HAR 里的 `.so` → HAP（SHA 不变）→ `dlopen` 命中 `<bundleCodeDir>/libs/arm64/libnode.so` → `/facts` 200。
 4. **发布本身踩了两个坑**（都不是包的问题，已在 §8 固化成 runbook）：
    `-t latest` 被服务端拒绝；无 TTY 环境下 ohpm 因**私钥口令提示死循环**而 `heap out of memory`。
-5. **审核已通过**；剩余仅维护性事项：`libc++_shared.so` 双份择一、`readme-zh` 英文版、兼容矩阵机读文件（§10）。
+5. **审核已通过**；剩余仅维护性事项：`libc++_shared.so` 双份择一（已收口，见 §7 第 9 项）、双语 README（已建）、兼容矩阵已随包（§7 第 6 项）。
 
 > 本文保留完整的规则基线（§2）、实测证据（§3）、差距与处置（§4）、决策记录（§5）、审核材料（§6）、
 > 文件清单（§7）与**实际发布 runbook（§8）**；凡状态已变化的条目，正文里都以 ✅/⬜ 直接标注，不做历史抹除。
@@ -502,12 +502,12 @@ calling node::Start(argc=4) ...
 | 1 | `library/CHANGELOG.md` | ✅ **已建** | `## 0.1.0（首发）`：功能面 / 配套运行时包 / 已知限制 / 验证记录 | HAR 内含且含 `0.1.0`（✅ 门禁通过） |
 | 2 | `library/LICENSE` | ✅ **已建** | 仓库根 MIT 逐字复制（`diff` 一致） | HAR 内含、非空（✅ 门禁通过） |
 | 3 | `library/README.md` | ✅ **已改关键段** | 新增「安装」（两条 `ohpm install`）、三步接入改为「装运行时包 → 声明 ACL → 自备载荷」、新增「包内容（发布物）」与许可段、修正 `dlopen` 限制 | 含 `ohpm install @fellow99/node-bridge`（✅ 门禁通过）；更细重写（API 表/兼容矩阵）仍可继续 |
-| 4 | `library/readme-zh.md`（可选） | ⬜ 未做 | 中文版（默认版建议英文/中英混排） | 详情页中文环境优先显示 |
+| 4 | `library/README.md` | ✅ **已定稿为中文单文件**（用户决策 2026-10-22：不做英文/双语变体）。附带实测结论：hvigor 只把 `README.md` 打进 HAR，语言变体文件（`README_zh.md` 等）**不会**随包 —— 中文内容直接放 `README.md` 即可，无需变体 | 详情页直接展示中文 README |
 | 5 | `library/oh-package.json5` | ✅ **已改** | `author` 对象（`fellow99` / `fellow99@163.com` / `https://fellow99.github.io/`）、`repository: https://github.com/fellow99/ohos-node-bridge`、`sourceType:"open"`；`dependencies` **保持为空** | 打包后字段合规（✅ 门禁通过） |
 | 6 | `library/src/main/resources/rawfile/node_bridge/runtime.lock.json` | ✅ **已建** | 从仓库根复制（3,374 B）；消费方用 `resourceManager.getRawFileContent('node_bridge/runtime.lock.json')` 读 | HAR 内含（✅ 实测）；`release.mjs --check-version` 断言副本与仓库根**逐字一致** |
 | 7 | `library/src/main/resources/rawfile/node_bridge/THIRD-PARTY-NOTICES.md` | ✅ **已建** | 同上（10,824 B），G4 许可清单随包 | 同上 |
 | 8 | `library/src/main/resources/rawfile/node_bridge/provision.mjs`（可选） | ⬜ 未做 | 让第三方拿到工具本体；或至少给用法 + SHA 校验脚本 | 第三方可独立校验 |
-| 9 | `library/.ohpmignore` | ⬜ 待定 | 是否排掉 `libc++_shared.so`（改由运行时包唯一提供，见 §5.5 第 3 项）；已排 `libnode.so` | 与 §10 第 5 项决策一致 |
+| 9 | `library/.ohpmignore` | ✅ **已关闭（维持现状）** | 实测结论：`libc++_shared.so` 是 hvigor 对 native 模块**自动补入**的（HAR 层无法排除）；运行时包也自带一份，最终 HAP 按路径去重只保留一份（✅ 实测）。`.ohpmignore` 仅在「按目录发布」兜底路径排它 | HAP 内只有一份 libc++_shared.so（✅ 实测） |
 | 10 | `tools/verify-har.mjs` | ✅ **已实现** | 发布门禁：零依赖解 gzip tar + 34 项断言（四件套 / README 安装命令 / CHANGELOG 版本 / author 对象+email\|url / repository / `metadata.debug===false` / 无 `.exe` 与签名材料 / `.so` 全在 `package/libs/` / 体积上限 / **主包不得含 libnode.so** / **运行时包 `libnode.so` 的 SHA+大小 = 锁值**）；`nativeComponents` 覆盖度按中心仓口径降为 **WARN** | `--check-version` 全过；**自测已做**：完好合成包 31/31 通过（exit 0），删掉 `CHANGELOG` 后 exit 2 |
 | 11 | `tools/release.mjs` | ✅ **已实现** | `--check-version`（版本/锁/CHANGELOG/Index 常量/已投放 `.so`/rawfile 副本共 17 项）/ `--build`（投放 → 两个 `assembleHar` → 双 `verify-har` → 双 `prepublish`）/ `--print-publish` | `node tools/release.mjs --check-version` → exit 0（✅ 实测） |
 | 12 | **`runtime-har/`（新 module）** | ✅ **已建** | `oh-package.json5`（`@fellow99/node-runtime@24.2.0`）、`Index.ets`、`README.md`、`CHANGELOG.md`、`LICENSE`、`src/main/module.json5`（零权限）、`.ohpmignore`、`build-profile.json5`、`hvigorfile.ts`；`libs/arm64-v8a/libnode.so` 由投放产出（不入库） | ✅ 出包 42.96 MB；34/34 门禁过；`prepublish` succeed |
@@ -650,7 +650,7 @@ what is your passphrase of the private key:      ← 输入生成密钥时设的
 | 2 | ~~`repository` 填哪个 URL~~ ✅ 已定：`https://github.com/fellow99/ohos-node-bridge`（两个包都已填） | — | — |
 | 3 | ~~`author.email` / `author.url`~~ ✅ 已定：`fellow99@163.com` / `https://fellow99.github.io/`（两个包都已填，`author` 改为对象） | — | — |
 | 4 | ~~运行时随包与否（A/B/C）~~ → **已定 B**（2026-10-22）；残余待确认：主包是否写死依赖（§5.4 ①/②） | 需拍板 | P0-5、spec 007 修订 |
-| 5 | `libc++_shared.so` 只在一处提供（§5.5 第 3 项）：现在主包与运行时包**各带一份**（HAP 内按路径去重，暂不出错） | 需拍板 | 包内容 / P1-1 |
+| 5 | ~~`libc++_shared.so` 收口~~ ✅ **已关闭（2026-10-22）**：实测 hvigor 对 native 模块自动补入 libc++_shared.so（HAR 层无法排除），运行时包也自带；最终 HAP 按路径去重只保留一份，无实际问题 | 已决策（维持现状） | — |
 | 6 | **残余许可**：`ohos-node-shared` 构建脚本的 MIT 原文/版权行 | 人工（取上游文件） | 不影响 ohpm 上架，影响许可完备性 |
 | 7 | 主包是否也钉 `24.2.0`（本文建议不要） | 需拍板 | 两包版本策略 |
 | 8 | ~~审核结果~~ ✅ **两包均已通过并上架**（2026-10-22） | — | — |
