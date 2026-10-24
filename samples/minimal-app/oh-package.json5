@@ -3,11 +3,10 @@
   "version": "0.1.0",
   "description": "ohos-node-bridge 最小样例 + 内置探针（HAP）",
   // 目录名带连字符便于阅读；module.name 用不含连字符的 `minimalapp`（构建期标识符更安全）。
-  // 依赖走**相对路径**指向库源码：这样 `ohpm install` 会用仓库里的 library 现场打 HAR，
-  // 不需要先发布到 ohpm（离线可构建）。
+  // bridge 走相对路径（仓库内现场打 HAR）；runtime 走 ohpm 包（独立仓库 ohos-node-runtime）。
   "dependencies": {
     "@fellow99/node-bridge": "file:../../library",
-    // 方案 B：运行时由独立包提供（libnode.so 随该 HAR 进入 HAP，不再需要手工投放）。
-    "@fellow99/node-runtime": "24.2.0"
+    // 运行时由独立仓库 ohos-node-runtime 发布到 ohpm（libnode.so 随该 HAR 进入 HAP）。
+    "@fellow99/node-runtime": "^24.2.0"
   }
 }

@@ -4,8 +4,8 @@
 `NAPI 引导 + dlopen + node::Start` 的形态嵌进 **HarmonyOS 应用自己的进程**，
 供 ArkTS 调用、由 ArkWeb 消费它起的本地服务。
 
-- 配套运行时包：**`@fellow99/node-runtime@24.2.0`**（Node 版本号即包版本号）
-- **状态**：`0.1.0` 已上架（2026-10-22，[详情页](https://ohpm.openharmony.cn/#/cn/detail/@fellow99/node-bridge)）
+- 配套运行时包：**`@fellow99/node-runtime@24.2.0`**（Node 版本号即包版本号，独立仓库 [ohos-node-runtime](https://github.com/fellow99/ohos-node-runtime)）
+- **状态**：`0.1.0` 已上架（2026-10-22，[详情页](https://ohpm.openharmony.cn/#/cn/detail/@fellow99/node-bridge)）；`0.2.0` 拆仓
 
 ## 安装（两个包，缺一不可）
 
@@ -18,9 +18,6 @@ ohpm install @fellow99/node-runtime@24.2.0
 ```
 
 > 主包**刻意不声明**对运行时包的依赖 ⇒ 两个包都要显式安装。
-> 离线/自建产物的替代方案：不用运行时包，改用
-> `ohos-node-bridge/tools/provision.mjs --out <你的模块>/libs/arm64-v8a` 手工投放
-> （版本与 SHA-256 由 `runtime.lock.json` 锁定）。**两种方式择一，不要同时放**同名 `.so`。
 
 装完 `assembleHap` 时，运行时包的 `libs/arm64-v8a/libnode.so` 会被合并进你的 HAP，
 运行期由引导件加载，**不需要额外投放步骤**；目标设备：`2in1` / `tablet`，ABI 只有 `arm64-v8a`。
@@ -42,7 +39,7 @@ const result = runtime.start(getContext(this) as common.UIAbilityContext, {
 
 | # | 做什么 | 为什么 |
 | --- | --- | --- |
-| 1 | **装运行时包**：`ohpm install @fellow99/node-runtime@24.2.0`；离线/自建场景可改用 `tools/provision.mjs --out <你的模块>/libs/arm64-v8a` 手工投放（二者**择一**，别同时放） | 本 HAR **不带** `libnode.so`（约 121 MB）；版本与 SHA-256 固化在 `runtime.lock.json`，由运行时包承载 |
+| 1 | **装运行时包**：`ohpm install @fellow99/node-runtime@24.2.0`（独立仓库 [ohos-node-runtime](https://github.com/fellow99/ohos-node-runtime) 发布） | 本 HAR **不带** `libnode.so`（约 121 MB），由运行时包承载 |
 | 2 | **声明权限与 ACL**：`ohos.permission.kernel.ALLOW_WRITABLE_CODE_MEMORY`（JIT 必需）按**你自己的包名**申请并声明 | 没有它，V8 走 JIT 即 SIGTRAP；`--jitless` 可兜底但 WebAssembly 全废 |
 | 3 | **自备载荷**：把应用代码放到 `resources/resfile/<app>/`（只读直读，零解压） | Node 读得到 ArkTS 写的文件，读不到包内只读条目 |
 

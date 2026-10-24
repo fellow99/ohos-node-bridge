@@ -127,7 +127,7 @@ function build() {
 function install() {
   if (!existsSync(OPT.hap)) {
     die(`没有 HAP：${OPT.hap}\n先跑 \`node tools/probe.mjs\`（含构建），或 \`--hap <path>\` 指定。\n` +
-      `注意 libnode.so 必须先投放：node tools/provision.mjs --out samples/minimal-app/libs/arm64-v8a`);
+      `注意 libnode.so 必须先投放：ohpm install @fellow99/node-runtime（独立仓库 ohos-node-runtime）`);
   }
   step(`安装 ${path.basename(OPT.hap)}`);
   const r = run(HDC, ['install', '-r', OPT.hap], { allowFail: true });

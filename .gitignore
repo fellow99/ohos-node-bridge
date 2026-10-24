@@ -15,17 +15,13 @@ signing.*.local.json
 *.cer
 
 # ── 运行时二进制 ──
-# libnode.so（约 121 MB）由 tools/provision.mjs 投放进**消费方模块**，本仓库不入库（见 runtime.lock.json / 附录 G）
+# libnode.so 由独立仓库 ohos-node-runtime 发布到 ohpm（@fellow99/node-runtime），
+# 本仓库不存储、不投放运行时二进制。
 **/libnode.so
 **/libc++_shared.so
-# 若手工把运行时放进库模块做本地试验（hvigor 的 CMake 产物落点由工具链决定，不在 src/main/libs/，
-# 这里两个路径都排掉，避免误提交 121 MB）
 library/libs/
 library/src/main/libs/
 *.har
-# runtime/ 已从父工程迁入本仓库：仅二进制（约 121 MB 的 libnode-arm64.so）不入库；
-# README.md / SHA256SUMS / PROVENANCE.md 等元数据入库（见 runtime.lock.json / 附录 G）
-/runtime/**/*.so
 
 # ohpm 生成的本地依赖锁（本仓库不提交任何 lock；下次 ohpm install 会重写）
 oh-package-lock.json5
