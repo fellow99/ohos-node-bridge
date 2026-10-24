@@ -43,20 +43,7 @@
         }
       ]
     },
-    {
-      // 运行时包（方案 B）：只承载 libnode.so 的 HAR，发布为 @fellow99/node-runtime@<node 版本>。
-      // ⚠️ module.name 不允许中划线（schema: ^[a-zA-Z][0-9a-zA-Z_.]*$）⇒ 标识符 runtimehar，目录 runtime-har。
-      "name": "runtimehar",
-      "srcPath": "./runtime-har",
-      "targets": [
-        {
-          "name": "default",
-          "applyToProducts": [
-            "default"
-          ]
-        }
-      ]
-    },
+    ,
     {
       // 最小样例 + 内置探针（HAP）。它**消费**本库（oh-package.json5 里 file:../../library），
       // 用途：① 证明 HAR 能被消费、能装进 HAP；② 作为真机探针（/facts 取证，见 docs/000 §7.2）。

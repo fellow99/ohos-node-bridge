@@ -8,6 +8,6 @@
   "dependencies": {
     "@fellow99/node-bridge": "file:../../library",
     // 方案 B：运行时由独立包提供（libnode.so 随该 HAR 进入 HAP，不再需要手工投放）。
-    "@fellow99/node-runtime": "file:../../runtime-har"
+    "@fellow99/node-runtime": "24.2.0"
   }
 }
