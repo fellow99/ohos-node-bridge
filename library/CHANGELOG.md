@@ -3,6 +3,16 @@
 本包是 **ArkTS 组件库 + NAPI 引导件**，版本号遵循自身语义化版本（semver）；
 运行时（`libnode.so`）由配套包 **`@fellow99/node-runtime`** 提供，其版本号 = Node 版本号。
 
+## 0.2.0（2026-10-31 发布/待发布）
+
+### 变更
+
+- **运行时拆分**：`libnode.so` 与构建/校验工具全量迁至配套仓 `ohos-node-runtime`（版本号 = Node 版本，互不耦合）。
+  本包版本号独立遵循 semver；`0.2.0` 对应锁定运行时集 v22.23.4 / v24.2.0 / v24.22.1 / v26.13.0。
+- **随包事实源更新**：rawfile 内 `runtime.lock.json` 同步为最新锁定集（含 Node **v26.13.0**，ABI 147），
+  `compatibility.json` 新增 26.13.0 条目并升 `recommended`。
+- 引导件仍然 ABI 无关（`dlopen('libnode.so')` 按名加载 + 稳定 Node-API），无需因 Node 大版本改编译。
+
 ## 0.1.0（2026-10-22 发布）
 
 ### 新增
