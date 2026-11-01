@@ -13,6 +13,28 @@
 
 ---
 
+## 发布版本 —— ohpm
+
+> ⚠️ **只发布 AArch64（arm64-v8a）一个架构**——鸿蒙侧仅面向 `2in1`/`tablet`（不做手机），无 x86 / x86_64 / arm32 包。
+
+**本包 —— `@fellow99/node-bridge`**
+
+| 版本 | 操作系统 | 架构 | 链接 |
+|---|---|---|---|
+| 0.1.0 | OpenHarmony | arm64-v8a | https://ohpm.openharmony.cn/#/cn/detail/@fellow99%2Fnode-bridge/v/0.1.0 |
+| 0.2.0 | OpenHarmony | arm64-v8a | https://ohpm.openharmony.cn/#/cn/detail/@fellow99%2Fnode-bridge/v/0.2.0 |
+
+**配对运行时 —— `@fellow99/node-runtime`**（由 [ohos-node-runtime](https://github.com/fellow99/ohos-node-runtime) 发布）
+
+| 版本 | 操作系统 | 架构 | 链接 |
+|---|---|---|---|
+| 24.2.0 | OpenHarmony | arm64-v8a | https://ohpm.openharmony.cn/#/cn/detail/@fellow99%2Fnode-runtime/v/24.2.0 |
+| 22.23.4 | OpenHarmony | arm64-v8a | https://ohpm.openharmony.cn/#/cn/detail/@fellow99%2Fnode-runtime/v/22.23.4 |
+| 24.22.1 | OpenHarmony | arm64-v8a | https://ohpm.openharmony.cn/#/cn/detail/@fellow99%2Fnode-runtime/v/24.22.1 |
+| 26.13.0 | OpenHarmony | arm64-v8a | https://ohpm.openharmony.cn/#/cn/detail/@fellow99%2Fnode-runtime/v/26.13.0 |
+
+---
+
 ## 工作原理
 
 ```
@@ -40,7 +62,7 @@
 ohpm install @fellow99/node-bridge
 
 # Runtime —— Node.js 引擎二进制（压缩后约 41 MB）
-ohpm install @fellow99/node-runtime@24.2.0
+ohpm install @fellow99/node-runtime@26.13.0
 ```
 
 bridge **刻意不声明**对 runtime 的依赖，所以两个包都要显式安装，Node 版本由你自己选择。
@@ -62,7 +84,7 @@ const result = runtime.start(getContext(this) as common.UIAbilityContext, {
 
 | # | 做什么 | 为什么 |
 |---|--------|--------|
-| 1 | 安装 `@fellow99/node-runtime@24.2.0` | bridge **不带** `libnode.so`（约 121 MB），由 runtime 包提供 |
+| 1 | 安装 `@fellow99/node-runtime@26.13.0` | bridge **不带** `libnode.so`（约 121 MB），由 runtime 包提供 |
 | 2 | 按**自己的包名**申请 ACL `ohos.permission.kernel.ALLOW_WRITABLE_CODE_MEMORY` | JIT 必需；没有它 V8 走 JIT 会 SIGTRAP，`--jitless` 可兜底但 WebAssembly 全废 |
 | 3 | 把载荷放到 `resources/resfile/<app>/`（只读直读） | Node 读不到包内只读条目，必须用应用沙箱绝对路径 |
 
@@ -83,7 +105,7 @@ const result = runtime.start(getContext(this) as common.UIAbilityContext, {
 | | **ohos-node-bridge**（本仓库） | [ohos-node-runtime](https://github.com/fellow99/ohos-node-runtime) |
 |---|---|---|
 | **ohpm 包** | `@fellow99/node-bridge` | `@fellow99/node-runtime` |
-| **版本** | 自身 semver（当前 `0.2.0`） | **= Node 版本**（当前 `24.2.0`） |
+| **版本** | 自身 semver（当前 `0.2.0`） | **= Node 版本**（当前 `26.13.0`） |
 | **装什么** | ArkTS 字节码 + `libnode_bridge.so` 引导件 + `libnode_host_client.so` NAPI addon | `libnode.so`（约 121 MB）+ `libc++_shared.so` + 版本常量 |
 | **干什么** | `NodeRuntime` 状态机、`HostBridge`（Node ↔ ArkTS）、`dlopen` 引擎并调 `node::Start` | 引擎本体：V8/JIT 与全部内置模块；**不提供 ArkTS API** |
 | **发布节奏** | 跟功能迭代走 | 跟 Node 大版本走 |
@@ -91,7 +113,7 @@ const result = runtime.start(getContext(this) as common.UIAbilityContext, {
 | 项 | 值 |
 |----|----|
 | 目标设备 | `2in1` / `tablet`（不做 phone）；ABI 仅 `arm64-v8a` |
-| 运行时 | Node.js **v24.2.0**；`process.versions.modules = 137` |
+| 运行时 | Node.js **v26.13.0**；`process.versions.modules = 147` |
 | 设计文档 | [`docs/`](docs/)（工程规划、规格、发布分析） |
 
 ## 仓库结构

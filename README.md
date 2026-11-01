@@ -14,6 +14,28 @@ is published as `@fellow99/node-runtime`.
 
 ---
 
+## Releases — ohpm
+
+> ⚠️ **AARCH64 (arm64-v8a) only** — HarmonyOS targets `2in1` / `tablet` (no phone), and there are no x86 / x86_64 / arm32 artifacts.
+
+**This package — `@fellow99/node-bridge`**
+
+| Version | OS | Arch | Link |
+|---|---|---|---|
+| 0.1.0 | OpenHarmony | arm64-v8a | https://ohpm.openharmony.cn/#/cn/detail/@fellow99%2Fnode-bridge/v/0.1.0 |
+| 0.2.0 | OpenHarmony | arm64-v8a | https://ohpm.openharmony.cn/#/cn/detail/@fellow99%2Fnode-bridge/v/0.2.0 |
+
+**Paired runtime — `@fellow99/node-runtime`** (published by [ohos-node-runtime](https://github.com/fellow99/ohos-node-runtime))
+
+| Version | OS | Arch | Link |
+|---|---|---|---|
+| 24.2.0 | OpenHarmony | arm64-v8a | https://ohpm.openharmony.cn/#/cn/detail/@fellow99%2Fnode-runtime/v/24.2.0 |
+| 22.23.4 | OpenHarmony | arm64-v8a | https://ohpm.openharmony.cn/#/cn/detail/@fellow99%2Fnode-runtime/v/22.23.4 |
+| 24.22.1 | OpenHarmony | arm64-v8a | https://ohpm.openharmony.cn/#/cn/detail/@fellow99%2Fnode-runtime/v/24.22.1 |
+| 26.13.0 | OpenHarmony | arm64-v8a | https://ohpm.openharmony.cn/#/cn/detail/@fellow99%2Fnode-runtime/v/26.13.0 |
+
+---
+
 ## How it works
 
 ```
@@ -43,7 +65,7 @@ You need **both** packages:
 ohpm install @fellow99/node-bridge
 
 # Runtime — the Node.js engine binary (~41 MB compressed)
-ohpm install @fellow99/node-runtime@24.2.0
+ohpm install @fellow99/node-runtime@26.13.0
 ```
 
 The bridge deliberately does **not** declare a dependency on the runtime, so you
@@ -66,7 +88,7 @@ const result = runtime.start(getContext(this) as common.UIAbilityContext, {
 
 | # | What | Why |
 |---|------|-----|
-| 1 | Install `@fellow99/node-runtime@24.2.0` | The bridge ships **no** `libnode.so` (~121 MB); the runtime package provides it |
+| 1 | Install `@fellow99/node-runtime@26.13.0` | The bridge ships **no** `libnode.so` (~121 MB); the runtime package provides it |
 | 2 | Request the ACL `ohos.permission.kernel.ALLOW_WRITABLE_CODE_MEMORY` under **your own bundle name** | Required for JIT. Without it, V8 SIGTRAPs on JIT; `--jitless` is a fallback but disables WebAssembly |
 | 3 | Place your payload under `resources/resfile/<app>/` (read-through) | Node cannot read packaged read-only entries; use an app-sandbox absolute path |
 
@@ -87,7 +109,7 @@ const result = runtime.start(getContext(this) as common.UIAbilityContext, {
 | | **ohos-node-bridge** (this repo) | [ohos-node-runtime](https://github.com/fellow99/ohos-node-runtime) |
 |---|---|---|
 | **ohpm package** | `@fellow99/node-bridge` | `@fellow99/node-runtime` |
-| **Version** | Independent semver (current `0.2.0`) | **Equals the Node.js version** (current `24.2.0`) |
+| **Version** | Independent semver (current `0.2.0`) | **Equals the Node.js version** (current `26.13.0`) |
 | **Contains** | ArkTS bytecode + `libnode_bridge.so` bootstrap + `libnode_host_client.so` NAPI addon | `libnode.so` (~121 MB) + `libc++_shared.so` + version constants |
 | **Role** | `NodeRuntime` state machine, `HostBridge` (Node ↔ ArkTS), `dlopen` the engine and call `node::Start` | The engine itself: V8/JIT and all built-in modules; **no ArkTS API** |
 | **Release cadence** | Driven by feature work | Driven by Node.js major versions |
@@ -95,7 +117,7 @@ const result = runtime.start(getContext(this) as common.UIAbilityContext, {
 | Item | Value |
 |------|-------|
 | Target devices | `2in1` / `tablet` (no phone); ABI `arm64-v8a` only |
-| Runtime | Node.js **v24.2.0**; `process.versions.modules = 137` |
+| Runtime | Node.js **v26.13.0**; `process.versions.modules = 147` |
 | Design doc | [`docs/`](docs/) (engineering plan, specs, publish notes) |
 
 ## Repository layout
