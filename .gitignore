@@ -30,5 +30,3 @@ oh-package-lock.json5
 # hvigor 生成的构建期常量（每次构建重写，不入库）
 /**/BuildProfile.ets
 
-# 构建/测试日志（不入库）
-logs/
