@@ -56,6 +56,21 @@
           ]
         }
       ]
+    },
+    {
+      // PRB 探针应用（HAP，feature 模块，specs/101-probe-app）。只消费本库 + 判据化探针五项
+      //（PRB-01 加载 / PRB-02 启动 / PRB-03 起服 / PRB-04 host桥 / PRB-05 版本契约）。
+      // type: feature —— minimal-app 已占 entry（Stage 模型下产品最多一个 entry，见 specs/101-probe-app/plan.md §3.3）。
+      "name": "probeapp",
+      "srcPath": "./probe-app",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
     }
   ]
 }

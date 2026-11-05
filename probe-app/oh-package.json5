@@ -1,0 +1,14 @@
+{
+  "name": "probeapp",
+  "version": "0.1.0",
+  "description": "PRB 探针应用（HAP，feature 模块）——消费 @fellow99/node-bridge，在真机上一键取 Node 平台事实并落沙箱报告",
+  // 目录名带连字符便于阅读；module.name 用不含连字符的 `probeapp`（构建期标识符更安全）。
+  // 只依赖本仓库的 library（file: 相对路径，离线可构建）。
+  // ⚠️ 本模块在仓库根（probe-app/），深度比 samples/minimal-app 浅一级 ⇒ file: 为 ../library
+  //   （minimal-app 是 ./samples/minimal-app ⇒ file:../../library，勿照抄）。
+  // 刻意不引 @fellow99/node-runtime：仓库内没有 libnode.so（runtime.lock.json 锁定 v26.13.0，
+  // .so 由 tools/provision.mjs 按锁文件投放，不入库）。真机断言见 test-cases D-xx（⬜）。
+  "dependencies": {
+    "@fellow99/node-bridge": "file:../library"
+  }
+}
