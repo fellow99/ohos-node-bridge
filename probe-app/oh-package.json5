@@ -6,9 +6,12 @@
   // 只依赖本仓库的 library（file: 相对路径，离线可构建）。
   // ⚠️ 本模块在仓库根（probe-app/），深度比 samples/minimal-app 浅一级 ⇒ file: 为 ../library
   //   （minimal-app 是 ./samples/minimal-app ⇒ file:../../library，勿照抄）。
-  // 刻意不引 @fellow99/node-runtime：仓库内没有 libnode.so（runtime.lock.json 锁定 v26.13.0，
-  // .so 由 tools/provision.mjs 按锁文件投放，不入库）。真机断言见 test-cases D-xx（⬜）。
+  // 依赖 @fellow99/node-runtime（ohpm 源，26.13.0 = library rawfile runtime.lock.json active =
+  // Index.ets TARGET_NODE）：引擎 libnode.so 由运行时 HAR 随 HAP 入包（PRB 加载/版本判据的前提），
+  // .so 不入本仓、不入 git（runtime.lock.json 锁定，tools/provision.mjs 按锁投放）。真机断言见
+  // test-cases D-xx（⬜）。
   "dependencies": {
-    "@fellow99/node-bridge": "file:../library"
+    "@fellow99/node-bridge": "file:../library",
+    "@fellow99/node-runtime": "26.13.0"
   }
 }
